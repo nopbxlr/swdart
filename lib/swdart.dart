@@ -22,7 +22,7 @@ library;
 
 // ── primary API ──────────────────────────────────────────────────────────
 export 'src/probe.dart' show Probe, ConnectMode, CoreRegister;
-export 'src/targets.dart' show TargetInfo, detectTarget;
+export 'src/targets.dart' show TargetInfo, TargetFamily, detectTarget;
 export 'src/flash.dart'
     show FlashDriver, ProgressFn, ProtectionState, ProtectionResult, At32Flash, Stm32f1Flash, NrfFlash;
 export 'src/intel_hex.dart' show FlashImage, parseIntelHex;

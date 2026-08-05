@@ -59,7 +59,7 @@ class Probe {
   Probe();
 
   UsbTransport? _usb;
-  DebugProbe? _stlink;
+  DebugProbe? _probe;
   CortexM? _core;
   TargetInfo? _target;
   FlashDriver? _driver;
@@ -69,17 +69,17 @@ class Probe {
   bool _stop = false;
 
   /// True once attached to a target.
-  bool get isConnected => _stlink != null;
+  bool get isConnected => _probe != null;
 
   /// The detected target, or null when not connected.
   TargetInfo? get target => _target;
 
   /// Human-readable probe name, e.g. "ST-Link/V2".
-  String get probeName => _stlink?.probeName ?? '?';
+  String get probeName => _probe?.probeName ?? '?';
 
   /// Whether the probe supports 16-bit memory access (needed for some option
   /// bytes); all V3, or V2 firmware >= J26.
-  bool get hasMem16 => _stlink?.hasMem16 ?? false;
+  bool get hasMem16 => _probe?.hasMem16 ?? false;
 
   /// Receive human-readable progress/status lines.
   void onLog(void Function(String line) sink) => _log = sink;
@@ -90,7 +90,7 @@ class Probe {
   Future<TargetInfo> connect(ConnectMode mode) async {
     if (mode == ConnectMode.attachRace) return _connectRace();
     await _openProbe();
-    final p = _stlink!;
+    final p = _probe!;
     final underReset = mode == ConnectMode.underReset || mode == ConnectMode.guided;
 
     if (underReset) {
@@ -119,7 +119,7 @@ class Probe {
 
   Future<TargetInfo> _connectRace() async {
     await _openProbe();
-    final p = _stlink!;
+    final p = _probe!;
     _stop = false;
     var attempt = 0;
     for (;;) {
@@ -165,7 +165,7 @@ class Probe {
   /// ST-Link V2 with firmware J28+ or a V3 probe.
   Future<NrfRecoverResult> recoverNordic() async {
     await _openProbe();
-    final p = _stlink!;
+    final p = _probe!;
     await p.enterSwd();
     final idcode = await p.readIdcode();
     _emit('[recover] SWD IDCODE ${hex(idcode)}');
@@ -175,25 +175,25 @@ class Probe {
   }
 
   Future<void> _openProbe() async {
-    if (_stlink != null) return;
+    if (_probe != null) return;
     // Reuse an already-granted probe without a prompt where possible (WebUSB);
     // fall back to a picker/enumeration otherwise.
     _usb = await reacquireStlink() ?? await requestStlink();
     final p = Stlink(_usb!);
     await p.init();
-    _stlink = p;
+    _probe = p;
     _emit('[probe] ${p.probeName} (${p.version.text})${p.hasMem16 ? ", 16-bit" : ""}');
   }
 
   Future<TargetInfo> _finishAttach() async {
-    final p = _stlink!;
+    final p = _probe!;
     _target = await detectTarget(p, _core!);
     // The DBGMCU watchdog-freeze register is an STM32/AT32 thing; don't poke it
     // on other families (e.g. Nordic, whose 0xE0042004 is unrelated).
-    if (_target!.family == 'STM32' || _target!.family == 'AT32') {
+    if (_target!.family == TargetFamily.stm32 || _target!.family == TargetFamily.at32) {
       await _freezeWatchdogs(p);
     }
-    _driver = _target!.family == 'unknown' ? null : _makeDriver();
+    _driver = _target!.family == TargetFamily.unknown ? null : _makeDriver();
     _emit('[target] ${_target!.name}');
     final voltage = await p.getTargetVoltage().catchError((_) => null);
     if (voltage != null) _emit('[target] Vtarget ${voltage.toStringAsFixed(2)} V');
@@ -218,17 +218,15 @@ class Probe {
 
   FlashDriver _makeDriver() {
     final t = _target!;
-    if (t.family == 'AT32') return At32Flash(_stlink!, _core!, t.pageSize, t.sramBytes);
-    if (t.family == 'STM32') {
-      // programAlign 4 marks a word-programmed FPEC (GD32E103); 2 is the usual
-      // STM32/GD32F103 halfword.
-      return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes,
-          rdpDisable: t.rdpDisableValue, word: t.programAlign == 4);
-    }
-    if (t.family == 'NRF') {
-      return NrfFlash(_stlink!, _core!, t.pageSize, isNrf52: t.protection == 'APPROTECT');
-    }
-    throw SwdException('no flash driver for target family "${t.family}"');
+    return switch (t.family) {
+      TargetFamily.at32 => At32Flash(_probe!, _core!, t.pageSize, t.sramBytes),
+      // t.word marks a word-programmed FPEC (GD32E103) vs the usual halfword.
+      TargetFamily.stm32 => Stm32f1Flash(_probe!, _core!, t.pageSize, t.sramBytes,
+          rdpDisable: t.rdpDisableValue, word: t.word),
+      TargetFamily.nrf =>
+        NrfFlash(_probe!, _core!, t.pageSize, isNrf52: t.protection == 'APPROTECT'),
+      TargetFamily.unknown => throw SwdException('no flash driver for an unknown target'),
+    };
   }
 
   CortexM get _c {
@@ -238,7 +236,7 @@ class Probe {
   }
 
   DebugProbe get _p {
-    final p = _stlink;
+    final p = _probe;
     if (p == null) throw SwdException('not connected');
     return p;
   }
@@ -385,9 +383,9 @@ class Probe {
   Future<void> disconnect() async {
     _stop = true;
     try {
-      await _stlink?.close();
+      await _probe?.close();
     } catch (_) {}
-    _stlink = null;
+    _probe = null;
     _core = null;
     _driver = null;
     _target = null;

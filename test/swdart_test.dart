@@ -70,7 +70,7 @@ void main() {
         0xe000ef34: 0, // no FPU
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'STM32');
+      expect(t.family, TargetFamily.stm32);
       expect(t.pageSize, 1024);
       expect(t.rdpDisableValue, 0xa5);
       expect(t.flashKB, 64);
@@ -85,7 +85,7 @@ void main() {
         0xe000ef34: 0,
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'STM32');
+      expect(t.family, TargetFamily.stm32);
       expect(t.name, contains('F03'));
       expect(t.rdpDisableValue, 0xaa);
     });
@@ -96,7 +96,7 @@ void main() {
         0xe000ef34: 0, // no FPU => F415, not F413
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'AT32');
+      expect(t.family, TargetFamily.at32);
       expect(t.pageSize, 1024);
       expect(t.flashKB, 128);
       expect(t.programAlign, 4);
@@ -108,7 +108,7 @@ void main() {
         0x1ffff7e0: 128, // 128 KB flash-size register
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'STM32');
+      expect(t.family, TargetFamily.stm32);
       expect(t.name, contains('GD32E103'));
       expect(t.pageSize, 1024);
       expect(t.programAlign, 4); // 32-bit word programming
@@ -123,7 +123,7 @@ void main() {
         0x10000100: 0x52832, // FICR.INFO.PART
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'NRF');
+      expect(t.family, TargetFamily.nrf);
       expect(t.name, contains('nRF52832'));
       expect(t.pageSize, 4096);
       expect(t.flashKB, 512);
@@ -139,7 +139,7 @@ void main() {
         0x10000100: 0xffffffff, // INFO.PART unimplemented on nRF51
       }));
       final t = await detectTarget(probe, CortexM(probe));
-      expect(t.family, 'NRF');
+      expect(t.family, TargetFamily.nrf);
       expect(t.name, contains('nRF51'));
       expect(t.pageSize, 1024);
       expect(t.flashKB, 256);

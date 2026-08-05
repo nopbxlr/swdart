@@ -1,5 +1,16 @@
 # Changelog
 
+## 0.2.0
+
+Internal cleanup; one small breaking API change.
+
+- **Breaking:** `TargetInfo.family` is now a `TargetFamily` enum (`stm32` / `at32`
+  / `nrf` / `unknown`) instead of a string. Use `family.name` for display.
+- `TargetInfo` gains an explicit `word` flag (true for GD32E103's 32-bit-word
+  FPEC), replacing the previous overloading of `programAlign == 4` as the driver
+  selector; `_makeDriver` now switches on the family enum.
+- No behaviour change; renamed the internal probe field for accuracy.
+
 ## 0.1.1
 
 - GigaDevice **GD32F103** and **GD32E103** support. GD32F103 is an STM32F103

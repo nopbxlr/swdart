@@ -10,6 +10,21 @@ const _dbgmcuF0F3 = 0x40015800;
 const _flashSizeF1 = 0x1ffff7e0;
 const _flashSizeF0F3 = 0x1ffff7cc;
 
+/// Which flash-driver family a detected target maps to.
+enum TargetFamily {
+  /// ST FPEC — STM32F0/F1/F3 and GigaDevice GD32F103/GD32E103.
+  stm32,
+
+  /// Artery FMC (AT32F415).
+  at32,
+
+  /// Nordic NVMC (nRF51/nRF52).
+  nrf,
+
+  /// Detected but unsupported / unidentified.
+  unknown,
+}
+
 class TargetInfo {
   TargetInfo({
     required this.name,
@@ -23,13 +38,18 @@ class TargetInfo {
     required this.protection,
     required this.rdpDisableValue,
     required this.tested,
+    this.word = false,
   });
 
   /// Human-readable device name.
   final String name;
 
-  /// Driver family: 'STM32' (FPEC), 'AT32' (FMC), or 'unknown'.
-  final String family;
+  /// Which flash-driver family this target maps to.
+  final TargetFamily family;
+
+  /// For [TargetFamily.stm32]: true if the FPEC programs in 32-bit words
+  /// (GD32E103) rather than 16-bit halfwords. Selects the loader/option width.
+  final bool word;
 
   /// DBGMCU IDCODE / Artery PID as read.
   final int idcode;
@@ -149,7 +169,7 @@ Future<TargetInfo?> _detectNordic(DebugProbe probe) async {
     name: hasPart
         ? 'nRF${part.toRadixString(16)} ($flashKB KB, $pageSize B pages)'
         : '${isNrf52 ? 'nRF52' : 'nRF51'} series ($flashKB KB, $pageSize B pages)',
-    family: 'NRF',
+    family: TargetFamily.nrf,
     idcode: hasPart ? part : 0,
     flashKB: flashKB,
     pageSize: pageSize,
@@ -178,12 +198,13 @@ Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
 
   // GD32E103 must be caught by its FMC_PID before the STM32F1 device-id table:
   // it may share device id 0x410 with medium-density parts, yet it programs in
-  // 32-bit words (programAlign 4 selects the word loader), not halfwords.
+  // 32-bit words (word: true), not halfwords.
   if (await _readReg(probe, _gd32FmcPid) == _gd32e103Pid) {
     final kb = (await _readFlashKB(probe, _flashSizeF1)).clamp(0, 4096);
     return TargetInfo(
       name: 'GD32E103 (Cortex-M4${kb > 0 ? ', $kb KB' : ''}, word-programmed FPEC)',
-      family: 'STM32',
+      family: TargetFamily.stm32,
+      word: true,
       idcode: _gd32e103Pid,
       flashKB: kb == 0 ? 128 : kb,
       pageSize: 1024,
@@ -208,7 +229,7 @@ Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
       final p = matches.first;
       return TargetInfo(
         name: '${p.name} (${p.flashKB} KB, ${p.pageSize} B pages)',
-        family: 'AT32',
+        family: TargetFamily.at32,
         idcode: idcode1,
         flashKB: p.flashKB,
         pageSize: p.pageSize,
@@ -224,7 +245,7 @@ Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
     final kb = flashKB == 0 ? 128 : flashKB;
     return TargetInfo(
       name: 'Artery AT32 device 0x${idcode1.toRadixString(16)} (untested — F415-like assumed)',
-      family: 'AT32',
+      family: TargetFamily.at32,
       idcode: idcode1,
       flashKB: kb,
       pageSize: kb > 128 ? 2048 : 1024,
@@ -255,7 +276,7 @@ Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
     name: shown == 0
         ? 'unknown (IDCODE reads 0 — target under reset or no SWD?)'
         : 'unknown device (IDCODE 0x${shown.toRadixString(16)})',
-    family: 'unknown',
+    family: TargetFamily.unknown,
     idcode: shown,
     flashKB: 0,
     pageSize: 1024,
@@ -272,7 +293,7 @@ Future<TargetInfo> _stm32(DebugProbe probe, int idcode, _Stm dev, int flashSizeR
   final flashKB = await _readFlashKB(probe, flashSizeReg);
   return TargetInfo(
     name: '${dev.name}${flashKB > 0 ? ', $flashKB KB flash' : ''}',
-    family: 'STM32',
+    family: TargetFamily.stm32,
     idcode: idcode,
     flashKB: flashKB,
     pageSize: dev.pageSize,

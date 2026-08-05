@@ -314,7 +314,7 @@ class _HomeState extends State<_Home> {
         _chip(t.name, _accent),
         _chip('IDCODE ${hex(t.idcode)}', Colors.white54),
         _chip('${t.flashKB} KB · ${t.pageSize} B pages', Colors.white54),
-        _chip(t.family, Colors.white54),
+        _chip(t.family.name.toUpperCase(), Colors.white54),
         _chip('${t.programAlign * 8}-bit', Colors.white54),
         if (!t.tested) _chip('untested part', _warn),
       ]),
