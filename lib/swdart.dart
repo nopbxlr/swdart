@@ -2,8 +2,9 @@
 /// in pure Dart.
 ///
 /// The USB transport is chosen automatically per platform: **WebUSB** in the
-/// browser and **libusb** on desktop. Supported targets today: STM32F103 and
-/// Artery AT32F415 (flash + read-protection); the probe, target-detection and
+/// browser and **libusb** on desktop. Supported targets today: STM32F0/F1/F3,
+/// Artery AT32F415, and Nordic nRF51/nRF52 (flash + read-protection, including
+/// CTRL-AP recovery of a locked nRF); the probe, target-detection and
 /// flash-driver layers are abstracted so more can be added.
 ///
 /// Start with [Probe]:
@@ -25,6 +26,7 @@ export 'src/targets.dart' show TargetInfo, detectTarget;
 export 'src/flash.dart'
     show FlashDriver, ProgressFn, ProtectionState, ProtectionResult, At32Flash, Stm32f1Flash, NrfFlash;
 export 'src/intel_hex.dart' show FlashImage, parseIntelHex;
+export 'src/nrf_recover.dart' show nrfCtrlApEraseAll, NrfRecoverResult;
 export 'src/util.dart' show SwdException, hex;
 
 // ── lower-level building blocks (custom flows / new drivers / new probes) ──

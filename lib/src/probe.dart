@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'cortexm.dart';
 import 'flash.dart';
+import 'nrf_recover.dart';
 import 'stlink.dart';
 import 'targets.dart';
 import 'transport.dart';
@@ -152,6 +153,25 @@ class Probe {
 
   /// Abort an in-progress [ConnectMode.attachRace].
   void abort() => _stop = true;
+
+  /// Recover a fully locked Nordic nRF51/nRF52 whose APPROTECT/RBPCONF has
+  /// disabled normal debug access: issue a CTRL-AP `ERASEALL` to wipe the chip
+  /// and clear protection. This works even when [connect] can't attach at all.
+  ///
+  /// On success the part is blank and debuggable — call [connect] afterwards
+  /// (a power-cycle first is harmless and never hurts). Safe to call against an
+  /// unknown target: a non-Nordic CTRL-AP is rejected before any erase. Needs an
+  /// ST-Link V2 with firmware J28+ or a V3 probe.
+  Future<NrfRecoverResult> recoverNordic() async {
+    await _openProbe();
+    final p = _stlink!;
+    await p.enterSwd();
+    final idcode = await p.readIdcode();
+    _emit('[recover] SWD IDCODE ${hex(idcode)}');
+    final res = await nrfCtrlApEraseAll(p, log: _emit);
+    _emit('[recover] done — chip erased and unprotected; reconnect to use it');
+    return res;
+  }
 
   Future<void> _openProbe() async {
     if (_stlink != null) return;

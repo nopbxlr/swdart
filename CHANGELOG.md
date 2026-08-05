@@ -15,6 +15,10 @@ Initial release.
 - Flash drivers for **STM32F0/F1/F3** (FPEC, RDP), Artery **AT32F415** (FMC,
   FAP), and Nordic **nRF51/nRF52** (NVMC, APPROTECT/RBPCONF). Read-protection
   get/set; disabling always forces the chip's mandatory mass-erase.
+- **Locked-nRF recovery** over CTRL-AP (`Probe.recoverNordic()` /
+  `nrfCtrlApEraseAll`): `ERASEALL`-unlock a part whose APPROTECT has disabled
+  the AHB-AP, without attaching. Guarded by the CTRL-AP IDR. Raw DAP-register and
+  multi-AP open/close primitives (`Stlink.readDapReg`/`writeDapReg`/`initAp`).
 - Target auto-detection with per-family flash base/size, page size, and program
   width; raw `.bin` and Intel **HEX** (`parseIntelHex`) inputs.
 - Watchdog freeze on attach (DBGMCU_CR) for STM32/AT32 so a running IWDG/WWDG

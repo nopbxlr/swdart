@@ -121,6 +121,13 @@ await probe.setProtection(false);                    // unlock — MASS-ERASES t
 Disabling protection always erases the whole flash — that's the security
 guarantee, and the only way back into a device its own firmware locked.
 
+For a Nordic part so locked that it won't even attach (APPROTECT has cut off the
+AHB-AP), recover it over CTRL-AP without connecting:
+
+```dart
+await Probe().recoverNordic();   // CTRL-AP ERASEALL — wipes + unlocks the nRF
+```
+
 ## How it works (and notable details)
 
 - **Flash loaders** — the STM32F1 FPEC programs in 16-bit halfwords and the
@@ -129,9 +136,13 @@ guarantee, and the only way back into a device its own firmware locked.
   drivers.
 - **Nordic NVMC** — nRF51/nRF52 program 32-bit words straight through the debug
   AP (no SRAM loader); erased (`0xFFFFFFFF`) words are skipped. The chip reports
-  its own page size and flash size from FICR. Unprotecting an nRF is a full
-  `ERASEALL`; a part already locked by APPROTECT (debug port disabled) needs a
-  CTRL-AP erase, which isn't implemented yet.
+  its own page size and flash size from FICR.
+- **Locked-nRF recovery** — a part whose APPROTECT/RBPCONF has disabled normal
+  debug access still answers on Nordic's **CTRL-AP** (access port #1).
+  `probe.recoverNordic()` opens it, verifies the CTRL-AP IDR, and issues an
+  `ERASEALL` to wipe the chip and clear protection — no attach required. It's the
+  SWD equivalent of the Artery FAP-disable rescue, and refuses to erase anything
+  whose CTRL-AP isn't Nordic. Needs an ST-Link V2 (firmware J28+) or a V3 probe.
 - **Watchdog freeze** — on attach it sets `DBGMCU_CR |= 0x307` so a running
   IWDG/WWDG can't reset the target mid-operation (the classic "core did not
   halt" failure). Same as OpenOCD's target cfg.

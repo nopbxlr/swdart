@@ -32,9 +32,16 @@ const _apiv2Readdebugreg = 0x36;
 const _apiv2GetLastRwStatus = 0x3b;
 const _apiv2DriveNrst = 0x3c;
 const _apiv2GetLastRwStatus2 = 0x3e;
+const _apiv2ReadDapReg = 0x45;
+const _apiv2WriteDapReg = 0x46;
 const _apiv2Readmem16 = 0x47;
 const _apiv2Writemem16 = 0x48;
+const _apiv2InitAp = 0x4b;
+const _apiv2CloseAp = 0x4c;
 const _debugEnterSwd = 0xa3;
+
+/// Passed as the DAP "port" to address the debug port itself (vs. an AP index).
+const dapPortDebug = 0xffff;
 
 const _statusOk = 0x80;
 
@@ -82,6 +89,13 @@ class Stlink {
 
   /// Native 16-bit memory access: all V3, or V2 firmware >= J26.
   bool get hasMem16 => _usb.isV3 || version.jtag >= 26;
+
+  /// Raw DAP register access (READ/WRITE_DAP_REG): all V3, or V2 firmware >= J24.
+  bool get hasDapReg => _usb.isV3 || version.jtag >= 24;
+
+  /// Multi-AP open/close (INIT_AP): all V3, or V2 firmware >= J28. Required to
+  /// reach any AP other than the AHB-AP — e.g. Nordic's CTRL-AP.
+  bool get hasApInit => _usb.isV3 || version.jtag >= 28;
 
   Future<void> init() async {
     await _readVersion();
@@ -176,6 +190,34 @@ class Stlink {
     final rx =
         await _usb.xfer([_cmdDebug, _apiv2Writedebugreg, ...u32(address), ...u32(value)], rxLen: 2);
     _checkStatus(rx, 'write ${hex(address)}');
+  }
+
+  /// Open (initialize) access port [apSel] so its registers can be reached with
+  /// [readDapReg]/[writeDapReg]. Needs [hasApInit].
+  Future<void> initAp(int apSel) async {
+    final rx = await _usb.xfer([_cmdDebug, _apiv2InitAp, apSel], rxLen: 2);
+    _checkStatus(rx, 'init AP $apSel');
+  }
+
+  /// Close access port [apSel].
+  Future<void> closeAp(int apSel) async {
+    final rx = await _usb.xfer([_cmdDebug, _apiv2CloseAp, apSel], rxLen: 2);
+    _checkStatus(rx, 'close AP $apSel');
+  }
+
+  /// Read raw DAP register [addr] from access port [apSel]
+  /// ([dapPortDebug] addresses the debug port itself). Needs [hasDapReg].
+  Future<int> readDapReg(int apSel, int addr) async {
+    final rx = await _usb.xfer([_cmdDebug, _apiv2ReadDapReg, ...u16(apSel), ...u16(addr)], rxLen: 8);
+    _checkStatus(rx, 'read DAP AP$apSel reg ${hex(addr, 4)}');
+    return u32le(rx, 4);
+  }
+
+  /// Write [value] to raw DAP register [addr] on access port [apSel].
+  Future<void> writeDapReg(int apSel, int addr, int value) async {
+    final rx = await _usb
+        .xfer([_cmdDebug, _apiv2WriteDapReg, ...u16(apSel), ...u16(addr), ...u32(value)], rxLen: 2);
+    _checkStatus(rx, 'write DAP AP$apSel reg ${hex(addr, 4)}');
   }
 
   Future<void> _checkLastRwStatus(String what) async {

@@ -193,6 +193,15 @@ class _HomeState extends State<_Home> {
         setState(() => _protection = null);
       });
 
+  Future<void> _recoverNordic() => _run('Recovering nRF', () async {
+        final ok = await _confirm('Recover locked nRF?',
+            'Issues a CTRL-AP ERASEALL: wipes the whole chip and clears APPROTECT. '
+            'Use this when a locked nRF51/nRF52 will not connect. '
+            'Needs an ST-Link V2 (firmware J28+) or a V3 probe.');
+        if (!ok) return;
+        await _probe.recoverNordic();
+      });
+
   Future<void> _readRegs() => _run('Reading registers', () async {
         final regs = await _probe.readRegisters();
         setState(() => _regs = regs);
@@ -384,6 +393,25 @@ class _HomeState extends State<_Home> {
           child: const Text('Unlock (erases chip)'),
         ),
       ]),
+      const SizedBox(height: 12),
+      const Text('LOCKED nRF RESCUE',
+          style: TextStyle(color: Colors.white38, fontSize: 11, letterSpacing: 1)),
+      const SizedBox(height: 6),
+      Align(
+        alignment: Alignment.centerLeft,
+        child: OutlinedButton.icon(
+          // Not gated on connection: a locked nRF can't attach normally.
+          onPressed: _busy ? null : _recoverNordic,
+          style: OutlinedButton.styleFrom(foregroundColor: _danger),
+          icon: const Icon(Icons.lock_reset, size: 18),
+          label: const Text('Recover locked nRF (CTRL-AP erase)'),
+        ),
+      ),
+      const Padding(
+        padding: EdgeInsets.only(top: 6),
+        child: Text('Works without connecting — for an nRF51/nRF52 whose APPROTECT blocks debug access.',
+            style: TextStyle(color: Colors.white38, fontSize: 12)),
+      ),
     ]);
   }
 

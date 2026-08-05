@@ -132,6 +132,88 @@ void main() {
       expect(t.protection, 'RBPCONF');
     });
   });
+
+  group('Nordic CTRL-AP recovery', () {
+    test('opens CTRL-AP, checks IDR, and issues ERASEALL', () async {
+      final t = _DapTransport(idr: 0x02880000);
+      final probe = Stlink(t)..version = ProbeVersion(2, 30, 0, 'V2J30');
+      final res = await nrfCtrlApEraseAll(probe);
+      expect(res.unprotected, isTrue);
+      expect(t.log, containsAllInOrder([
+        'initap:1', // open CTRL-AP (#1)
+        'read:1:fc', // read IDR
+        'write:1:0:1', // hold reset
+        'write:1:4:1', // ERASEALL = 1
+        'read:1:8', // poll ERASEALLSTATUS
+        'write:1:0:0', // release reset
+        'read:1:c', // APPROTECTSTATUS
+      ]));
+    });
+
+    test('refuses to erase a non-Nordic CTRL-AP', () async {
+      final t = _DapTransport(idr: 0xdeadbeef);
+      final probe = Stlink(t)..version = ProbeVersion(2, 30, 0, 'V2J30');
+      await expectLater(nrfCtrlApEraseAll(probe), throwsA(isA<SwdException>()));
+      expect(t.log, isNot(contains('write:1:4:1'))); // never issued ERASEALL
+    });
+
+    test('rejects ST-Link firmware older than J28', () async {
+      final t = _DapTransport(idr: 0x02880000);
+      final probe = Stlink(t)..version = ProbeVersion(2, 24, 0, 'V2J24');
+      await expectLater(nrfCtrlApEraseAll(probe), throwsA(isA<SwdException>()));
+      expect(t.log, isEmpty); // bailed before touching the wire
+    });
+  });
+}
+
+/// Records CTRL-AP traffic and answers READ/WRITE_DAP_REG + INIT/CLOSE_AP so the
+/// recovery sequence can be exercised without hardware.
+class _DapTransport implements UsbTransport {
+  _DapTransport({required this.idr});
+  final int idr;
+  final log = <String>[];
+
+  @override
+  int get productId => 0x3748;
+  @override
+  String get productName => 'fake';
+  @override
+  bool get isV3 => false;
+
+  @override
+  Future<Uint8List> xfer(List<int> command, {int rxLen = 0, Uint8List? data}) async {
+    if (command.length >= 2 && command[0] == 0xf2) {
+      switch (command[1]) {
+        case 0x4b: // INIT_AP
+          log.add('initap:${command[2]}');
+          return Uint8List.fromList([0x80, 0]);
+        case 0x4c: // CLOSE_AP
+          log.add('closeap:${command[2]}');
+          return Uint8List.fromList([0x80, 0]);
+        case 0x45: // READ_DAP_REG
+          final port = command[2] | command[3] << 8;
+          final addr = command[4] | command[5] << 8;
+          log.add('read:$port:${addr.toRadixString(16)}');
+          final v = switch (addr) {
+            0xfc => idr, // IDR
+            0x08 => 0, //   ERASEALLSTATUS: done
+            0x0c => 1, //   APPROTECTSTATUS: unprotected
+            _ => 0,
+          };
+          return Uint8List.fromList([0x80, 0, 0, 0, v & 0xff, v >> 8 & 0xff, v >> 16 & 0xff, v >> 24 & 0xff]);
+        case 0x46: // WRITE_DAP_REG
+          final port = command[2] | command[3] << 8;
+          final addr = command[4] | command[5] << 8;
+          final val = command[6] | command[7] << 8 | command[8] << 16 | command[9] << 24;
+          log.add('write:$port:${addr.toRadixString(16)}:${val.toRadixString(16)}');
+          return Uint8List.fromList([0x80, 0]);
+      }
+    }
+    return Uint8List(rxLen);
+  }
+
+  @override
+  Future<void> close() async {}
 }
 
 /// A fake ST-Link USB transport that answers only READDEBUGREG with a mapped
