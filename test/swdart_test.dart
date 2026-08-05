@@ -101,6 +101,36 @@ void main() {
       expect(t.flashKB, 128);
       expect(t.programAlign, 4);
     });
+
+    test('Nordic nRF52832 via FICR (4 KB pages, APPROTECT)', () async {
+      final probe = Stlink(_FakeTransport({
+        0x10000010: 4096, // FICR.CODEPAGESIZE
+        0x10000014: 128, //  FICR.CODESIZE (pages) => 512 KB
+        0x10000100: 0x52832, // FICR.INFO.PART
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'NRF');
+      expect(t.name, contains('nRF52832'));
+      expect(t.pageSize, 4096);
+      expect(t.flashKB, 512);
+      expect(t.flashBase, 0);
+      expect(t.programAlign, 4);
+      expect(t.protection, 'APPROTECT');
+    });
+
+    test('Nordic nRF51 via FICR (1 KB pages, RBPCONF, no INFO.PART)', () async {
+      final probe = Stlink(_FakeTransport({
+        0x10000010: 1024, // FICR.CODEPAGESIZE
+        0x10000014: 256, //  256 KB
+        0x10000100: 0xffffffff, // INFO.PART unimplemented on nRF51
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'NRF');
+      expect(t.name, contains('nRF51'));
+      expect(t.pageSize, 1024);
+      expect(t.flashKB, 256);
+      expect(t.protection, 'RBPCONF');
+    });
   });
 }
 

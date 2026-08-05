@@ -113,6 +113,8 @@ class _HomeState extends State<_Home> {
   Future<void> _connect() => _run('Connecting', () async {
         final t = await _probe.connect(_mode);
         final p = await _probe.readProtection().catchError((_) => ProtectionState(false, '?'));
+        // Follow the detected flash base (0x08000000 on STM32/AT32, 0x0 on nRF).
+        _addrCtl.text = '0x${t.flashBase.toRadixString(16).padLeft(8, '0')}';
         setState(() {
           _target = t;
           _protection = p;

@@ -1,5 +1,5 @@
 // Target identification: STM32F0/F1/F3 (and GD32 clones) via the shared FPEC,
-// and Artery AT32 via its DBGMCU "project ID".
+// Artery AT32 via its DBGMCU "project ID", and Nordic nRF51/nRF52 via FICR.
 import 'cortexm.dart';
 import 'stlink.dart';
 
@@ -43,13 +43,13 @@ class TargetInfo {
   /// On-chip SRAM in bytes (conservative minimum — sizes the SRAM flash loader).
   final int sramBytes;
 
-  /// Flash base address (0x08000000).
+  /// Flash base address (0x08000000 on STM32/AT32, 0x00000000 on Nordic).
   final int flashBase;
 
-  /// Program granularity: 2 (STM32 halfword) or 4 (AT32 word).
+  /// Program granularity: 2 (STM32 halfword) or 4 (AT32/Nordic word).
   final int programAlign;
 
-  /// Read-protection scheme: 'RDP', 'FAP', or 'none'.
+  /// Read-protection scheme: 'RDP', 'FAP', 'APPROTECT', 'RBPCONF', or 'none'.
   final String protection;
 
   /// Value that disables read protection (STM32: 0xA5 on F1, 0xAA on F0/F3).
@@ -128,7 +128,46 @@ Future<int> _readFlashKB(Stlink probe, int reg) async {
   return kb == 0xffff ? 0 : kb;
 }
 
+// ── Nordic nRF51 / nRF52 (FICR at 0x10000000) ────────────────────────────────
+const _ficrCodePageSize = 0x10000010; // bytes per page (1024 nRF51, 4096 nRF52)
+const _ficrCodeSize = 0x10000014; //     flash size in pages
+const _ficrInfoPart = 0x10000100; //     part number (nRF52+; 0xFFFFFFFF on nRF51)
+
+/// Positive Nordic signature: a sane FICR page size + page count. STM32/AT32
+/// read 0 (reserved region) here, so this can run first without false matches.
+Future<TargetInfo?> _detectNordic(Stlink probe) async {
+  final pageSize = await _readReg(probe, _ficrCodePageSize);
+  final codePages = await _readReg(probe, _ficrCodeSize);
+  final pageOk = pageSize == 1024 || pageSize == 2048 || pageSize == 4096;
+  if (!pageOk || codePages == 0 || codePages > 0x1000) return null;
+
+  final flashKB = (pageSize * codePages) ~/ 1024;
+  final isNrf52 = pageSize >= 4096;
+  final part = await _readReg(probe, _ficrInfoPart);
+  final hasPart = part != 0 && part != 0xffffffff;
+  return TargetInfo(
+    name: hasPart
+        ? 'nRF${part.toRadixString(16)} ($flashKB KB, $pageSize B pages)'
+        : '${isNrf52 ? 'nRF52' : 'nRF51'} series ($flashKB KB, $pageSize B pages)',
+    family: 'NRF',
+    idcode: hasPart ? part : 0,
+    flashKB: flashKB,
+    pageSize: pageSize,
+    sramBytes: 16 * 1024, // unused: the NVMC driver needs no SRAM loader
+    flashBase: 0x00000000,
+    programAlign: 4,
+    protection: isNrf52 ? 'APPROTECT' : 'RBPCONF',
+    rdpDisableValue: 0,
+    tested: false,
+  );
+}
+
 Future<TargetInfo> detectTarget(Stlink probe, CortexM core) async {
+  // Nordic first — its FICR signature is unambiguous and avoids an nRF whose
+  // 0xE0042000 read happens to look AT32-like.
+  final nrf = await _detectNordic(probe);
+  if (nrf != null) return nrf;
+
   final idcode1 = await _readReg(probe, _dbgmcuF1);
 
   // Artery AT32 — the PID is the DBGMCU IDCODE (top byte 0x70/0x50).

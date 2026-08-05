@@ -21,8 +21,9 @@ await probe.disconnect();
 - **Debugging** — halt / resume / single-step, read & write core registers,
   read & write arbitrary memory, reset-halt / reset-run.
 - **Programming** — read (dump), erase, write, verify flash; a one-call
-  high-level `program()`; read-protection get/set, including the mass-erase
-  recovery path that clears protection on a device its own firmware locked.
+  high-level `program()`; read-protection get/set. Clearing protection forces a
+  full mass-erase — that wipe is the security guarantee (not a way to recover
+  the contents), and the only way back into a device its own firmware locked.
 - **One codebase, two transports** — the USB layer is chosen by conditional
   import: WebUSB (`dart:js_interop`) on web, libusb-1.0 (`dart:ffi`) on desktop.
   Runs in Flutter (web + desktop) and in plain Dart CLIs.
@@ -32,7 +33,7 @@ await probe.disconnect();
 | | |
 |---|---|
 | Probes | ST-Link/V2, V2-1, V3 (and V2 clones) |
-| Targets | **STM32F0 / F1 / F3** (FPEC) and Artery **AT32F415** (FMC) — flash + RDP/FAP |
+| Targets | **STM32F0 / F1 / F3** (FPEC), Artery **AT32F415** (FMC), Nordic **nRF51 / nRF52** (NVMC) — flash + protection |
 | Files | raw `.bin` and Intel **HEX** (`parseIntelHex`) |
 | Platforms | Web (Chrome/Edge, WebUSB), Windows, macOS, Linux (libusb) |
 
@@ -126,6 +127,11 @@ guarantee, and the only way back into a device its own firmware locked.
   AT32 FMC in 32-bit words, so tiny hand-verified Thumb routines run from target
   SRAM to hit the required width; register sequences follow OpenOCD's own
   drivers.
+- **Nordic NVMC** — nRF51/nRF52 program 32-bit words straight through the debug
+  AP (no SRAM loader); erased (`0xFFFFFFFF`) words are skipped. The chip reports
+  its own page size and flash size from FICR. Unprotecting an nRF is a full
+  `ERASEALL`; a part already locked by APPROTECT (debug port disabled) needs a
+  CTRL-AP erase, which isn't implemented yet.
 - **Watchdog freeze** — on attach it sets `DBGMCU_CR |= 0x307` so a running
   IWDG/WWDG can't reset the target mid-operation (the classic "core did not
   halt" failure). Same as OpenOCD's target cfg.

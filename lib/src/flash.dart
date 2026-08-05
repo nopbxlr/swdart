@@ -488,6 +488,152 @@ class Stm32f1Flash implements FlashDriver {
   }
 }
 
+// ─────────────────────── Nordic nRF51 / nRF52 (NVMC) ──────────────────────
+// The Non-Volatile Memory Controller programs flash a 32-bit word at a time
+// straight through the debug AP — no SRAM loader needed. Register map is shared
+// by nRF51 and nRF52; only the page size (1 KB vs 4 KB) and the UICR
+// access-protection register differ.
+const _nvmcBase = 0x4001e000;
+const _nvmcReady = _nvmcBase + 0x400; // bit0 = 1 when idle
+const _nvmcConfig = _nvmcBase + 0x504; // 0 read-only, 1 write, 2 erase
+const _nvmcErasePage = _nvmcBase + 0x508; // write the page's base address
+const _nvmcEraseAll = _nvmcBase + 0x50c; // write 1 to erase code + UICR
+
+const _nvmcRen = 0;
+const _nvmcWen = 1;
+const _nvmcEen = 2;
+
+// UICR access protection — low byte 0xFF means unprotected.
+const _uicrApprotect52 = 0x10001208; // nRF52 APPROTECT
+const _uicrRbpconf51 = 0x10001004; //   nRF51 RBPCONF (PALL in bits[7:0])
+
+class NrfFlash implements FlashDriver {
+  NrfFlash(this._probe, this._core, this._pageSize, {required this.isNrf52});
+
+  final Stlink _probe;
+  final CortexM _core;
+  final int _pageSize;
+  final bool isNrf52;
+
+  int get _protReg => isNrf52 ? _uicrApprotect52 : _uicrRbpconf51;
+
+  @override
+  int get programAlign => 4;
+
+  Future<void> _waitReady(int timeoutMs) async {
+    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+    for (;;) {
+      if (await _probe.readDebugReg(_nvmcReady) & 1 != 0) return;
+      if (DateTime.now().isAfter(deadline)) throw SwdException('nRF NVMC busy after $timeoutMs ms');
+      await sleep(1);
+    }
+  }
+
+  Future<void> _config(int mode) async {
+    await _probe.writeDebugReg(_nvmcConfig, mode);
+    await _waitReady(100);
+  }
+
+  @override
+  Future<void> massErase() async {
+    await _config(_nvmcEen);
+    try {
+      await _probe.writeDebugReg(_nvmcEraseAll, 1);
+      await _waitReady(30000);
+    } finally {
+      await _config(_nvmcRen);
+    }
+  }
+
+  @override
+  Future<void> erase(int address, int length, [ProgressFn? progress]) async {
+    final first = (address ~/ _pageSize) * _pageSize;
+    final last = ((address + length + _pageSize - 1) ~/ _pageSize) * _pageSize;
+    final total = (last - first) ~/ _pageSize;
+    await _config(_nvmcEen);
+    try {
+      var done = 0;
+      for (var page = first; page < last; page += _pageSize) {
+        await _probe.writeDebugReg(_nvmcErasePage, page);
+        await _waitReady(1000);
+        progress?.call(++done, total);
+      }
+    } finally {
+      await _config(_nvmcRen);
+    }
+  }
+
+  @override
+  Future<void> program(int address, Uint8List data, [ProgressFn? progress]) async {
+    if (address % 4 != 0) throw SwdException('nRF program address must be word-aligned');
+    if (!await _core.isHalted()) throw SwdException('core must be halted to program flash');
+
+    final padLen = ((data.length + 3) >> 2) << 2;
+    final padded = Uint8List(padLen)..fillRange(0, padLen, 0xff);
+    padded.setRange(0, data.length, data);
+    final total = padded.length;
+
+    await _config(_nvmcWen);
+    try {
+      for (var off = 0; off < total; off += 4) {
+        final word = u32le(padded, off);
+        // Flash writes only clear 1->0, so a 0xFFFFFFFF word over freshly-erased
+        // flash is a no-op — skip it (a big win for the usual 0xFF padding).
+        if (word != 0xffffffff) {
+          await _probe.writeDebugReg(address + off, word);
+          await _waitReady(500);
+        }
+        if ((off & 0x3ff) == 0) progress?.call(off, total);
+      }
+      progress?.call(total, total);
+    } finally {
+      await _config(_nvmcRen);
+    }
+  }
+
+  @override
+  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
+      _verifyCommon(_probe, address, data, progress);
+
+  @override
+  Future<ProtectionState> readProtection() async {
+    final v = await _probe.readDebugReg(_protReg);
+    final enabled = (v & 0xff) != 0xff;
+    final tag = isNrf52 ? 'APPROTECT' : 'RBPCONF';
+    return ProtectionState(enabled, enabled ? 'enabled ($tag)' : 'disabled');
+  }
+
+  @override
+  Future<ProtectionResult> setProtection(bool enable) async {
+    if (enable) {
+      // Clear the protection byte in UICR (flash: only 1->0, and UICR must be
+      // erased/0xFF first). Takes effect after a reset.
+      await _config(_nvmcWen);
+      try {
+        await _probe.writeDebugReg(_protReg, isNrf52 ? 0x00000000 : 0xffffff00);
+        await _waitReady(500);
+      } finally {
+        await _config(_nvmcRen);
+      }
+      return ProtectionResult(
+        massErased: false,
+        resetRequired: true,
+        autoReset: false,
+        message: 'Access protection enabled in UICR. Power-cycle for it to take effect.',
+      );
+    }
+    // Disabling = full chip erase (ERASEALL also clears UICR back to 0xFF).
+    await massErase();
+    return ProtectionResult(
+      massErased: true,
+      resetRequired: true,
+      autoReset: false,
+      message: 'Chip erased (ERASEALL); access protection cleared. A chip already '
+          'locked by APPROTECT (debug port disabled) instead needs a CTRL-AP ERASEALL.',
+    );
+  }
+}
+
 // Shared read-back verify.
 Future<void> _verifyCommon(Stlink probe, int address, Uint8List data, ProgressFn? progress) async {
   final total = data.length;

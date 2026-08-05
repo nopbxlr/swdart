@@ -166,8 +166,12 @@ class Probe {
 
   Future<TargetInfo> _finishAttach() async {
     final p = _stlink!;
-    await _freezeWatchdogs(p);
     _target = await detectTarget(p, _core!);
+    // The DBGMCU watchdog-freeze register is an STM32/AT32 thing; don't poke it
+    // on other families (e.g. Nordic, whose 0xE0042004 is unrelated).
+    if (_target!.family == 'STM32' || _target!.family == 'AT32') {
+      await _freezeWatchdogs(p);
+    }
     _driver = _target!.family == 'unknown' ? null : _makeDriver();
     _emit('[target] ${_target!.name}');
     final voltage = await p.getTargetVoltage().catchError((_) => null);
@@ -196,6 +200,9 @@ class Probe {
     if (t.family == 'AT32') return At32Flash(_stlink!, _core!, t.pageSize, t.sramBytes);
     if (t.family == 'STM32') {
       return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes, rdpDisable: t.rdpDisableValue);
+    }
+    if (t.family == 'NRF') {
+      return NrfFlash(_stlink!, _core!, t.pageSize, isNrf52: t.protection == 'APPROTECT');
     }
     throw SwdException('no flash driver for target family "${t.family}"');
   }
@@ -340,9 +347,9 @@ class Probe {
   /// Read the target's read/flash-access-protection state (RDP / FAP).
   Future<ProtectionState> readProtection() => _drv.readProtection();
 
-  /// Enable or disable read protection. Disabling always mass-erases the chip
-  /// (the security guarantee) — the recovery path for a device locked by its
-  /// own firmware.
+  /// Enable or disable read protection. Disabling always mass-erases the chip —
+  /// that wipe is the security guarantee, not a way to recover its contents; it's
+  /// simply the only way back into a device its own firmware locked.
   Future<ProtectionResult> setProtection(bool enable) async {
     await resetHalt();
     final res = await _drv.setProtection(enable);

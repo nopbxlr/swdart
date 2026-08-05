@@ -12,9 +12,12 @@ Initial release.
   (`dart:js_interop`) on web, **libusb-1.0** (`dart:ffi`) on desktop, selected
   by conditional import.
 - Cortex-M debug control and hand-verified Thumb SRAM flash loaders.
-- Flash drivers for STM32F103 (FPEC) and Artery AT32F415 (FMC), including
-  RDP/FAP read-protection and the mass-erase "unbrick" path.
-- Watchdog freeze on attach (DBGMCU_CR) so a running IWDG/WWDG can't reset the
-  target mid-operation.
+- Flash drivers for **STM32F0/F1/F3** (FPEC, RDP), Artery **AT32F415** (FMC,
+  FAP), and Nordic **nRF51/nRF52** (NVMC, APPROTECT/RBPCONF). Read-protection
+  get/set; disabling always forces the chip's mandatory mass-erase.
+- Target auto-detection with per-family flash base/size, page size, and program
+  width; raw `.bin` and Intel **HEX** (`parseIntelHex`) inputs.
+- Watchdog freeze on attach (DBGMCU_CR) for STM32/AT32 so a running IWDG/WWDG
+  can't reset the target mid-operation.
 - ST-Link endpoint selection matching OpenOCD (V2-1/V3 → OUT 0x01; V1/V2/unknown
   → OUT 0x02; IN 0x81).
