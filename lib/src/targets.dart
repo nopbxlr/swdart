@@ -65,8 +65,8 @@ typedef _Stm = ({String name, int pageSize, int sram, int rdp, bool tested});
 // F1 line — DBGMCU at 0xE0042000, flash size at 0x1FFFF7E0, RDP disable 0xA5.
 const _stm32f1 = <int, _Stm>{
   0x412: (name: 'STM32F1 low-density', pageSize: 1024, sram: 6 * 1024, rdp: 0xa5, tested: false),
-  0x410: (name: 'STM32F1 medium-density', pageSize: 1024, sram: 10 * 1024, rdp: 0xa5, tested: true),
-  0x414: (name: 'STM32F1 high-density', pageSize: 2048, sram: 48 * 1024, rdp: 0xa5, tested: true),
+  0x410: (name: 'STM32F103 / GD32F103 medium-density', pageSize: 1024, sram: 10 * 1024, rdp: 0xa5, tested: true),
+  0x414: (name: 'STM32F103 / GD32F30x high-density', pageSize: 2048, sram: 48 * 1024, rdp: 0xa5, tested: true),
   0x418: (name: 'STM32F105/107 connectivity', pageSize: 2048, sram: 32 * 1024, rdp: 0xa5, tested: false),
   0x430: (name: 'STM32F1 XL-density', pageSize: 2048, sram: 80 * 1024, rdp: 0xa5, tested: false),
   0x420: (name: 'STM32F100 value (low/medium)', pageSize: 1024, sram: 4 * 1024, rdp: 0xa5, tested: false),
