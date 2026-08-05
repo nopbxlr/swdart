@@ -39,6 +39,48 @@ abstract class FlashDriver {
   Future<ProtectionResult> setProtection(bool enable);
 }
 
+// ── Shared plumbing for the ST/GigaDevice FPEC and the register-compatible ─────
+// Artery FMC. Both run a tiny SRAM loader out of a work buffer and poll BSY at
+// the same status register (0x4002200C bit 0). The families diverge on unlock,
+// erase, program width and protection — that logic stays in the subclasses.
+const _fpecStatus = 0x40022000 + 0x0c;
+const _fpecBusy = 1 << 0;
+
+abstract class _FpecFlash implements FlashDriver {
+  _FpecFlash(DebugProbe probe, CortexM core, int pageSize, int sramBytes)
+      : _probe = probe,
+        _core = core,
+        _pageSize = pageSize,
+        _bufferSize = (() {
+          final s = ((sramBytes - 0x400) >> 2) << 2;
+          return s < 0x2000 ? s : 0x2000;
+        })() {
+    if (_bufferSize < 0x400) throw SwdException('target SRAM too small for flash loader');
+  }
+
+  final DebugProbe _probe;
+  final CortexM _core;
+  final int _pageSize;
+  final int _bufferSize;
+  final int _loaderAddr = 0x20000000;
+  final int _bufferAddr = 0x20000100;
+
+  /// Poll the FPEC status register until BSY clears; returns the final status.
+  Future<int> _waitBusy(int timeoutMs) async {
+    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+    for (;;) {
+      final sr = await _probe.readDebugReg(_fpecStatus);
+      if ((sr & _fpecBusy) == 0) return sr;
+      if (DateTime.now().isAfter(deadline)) throw SwdException('flash busy after $timeoutMs ms');
+      await sleep(2);
+    }
+  }
+
+  @override
+  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
+      _verifyCommon(_probe, address, data, progress);
+}
+
 // ─────────────────────────── AT32F415 (Artery FMC) ───────────────────────────
 const _atBase = 0x40022000;
 const _atUnlock = _atBase + 0x04;
@@ -60,7 +102,6 @@ const _ctrlErstr = 1 << 6;
 const _ctrlOplk = 1 << 7;
 const _ctrlUsdulks = 1 << 9;
 
-const _stsObf = 1 << 0;
 const _stsPrgmerr = 1 << 2;
 const _stsEpperr = 1 << 4;
 
@@ -76,33 +117,13 @@ const _crmHickstbl = 1 << 0;
 
 const _usdBase = 0x1ffff800;
 
-class At32Flash implements FlashDriver {
-  At32Flash(this._probe, this._core, this._pageSize, int sramBytes, {this.hasFapHighLevel = true})
-      : _bufferSize = (() {
-          final s = ((sramBytes - 0x400) >> 2) << 2;
-          return s < 0x2000 ? s : 0x2000;
-        })();
+class At32Flash extends _FpecFlash {
+  At32Flash(super.probe, super.core, super.pageSize, super.sramBytes, {this.hasFapHighLevel = true});
 
-  final DebugProbe _probe;
-  final CortexM _core;
-  final int _pageSize;
   final bool hasFapHighLevel;
-  final int _bufferSize;
-  final int _loaderAddr = 0x20000000;
-  final int _bufferAddr = 0x20000100;
 
   @override
   int get programAlign => 4;
-
-  Future<int> _waitBusy(int timeoutMs) async {
-    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
-    for (;;) {
-      final sts = await _probe.readDebugReg(_atSts);
-      if ((sts & _stsObf) == 0) return sts;
-      if (DateTime.now().isAfter(deadline)) throw SwdException('AT32 flash busy after $timeoutMs ms');
-      await sleep(2);
-    }
-  }
 
   Future<void> _enableHick() async {
     var ctrl = await _probe.readDebugReg(_crmCtrl);
@@ -218,10 +239,6 @@ class At32Flash implements FlashDriver {
   }
 
   @override
-  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
-      _verifyCommon(_probe, address, data, progress);
-
-  @override
   Future<ProtectionState> readProtection() async {
     final usd = await _probe.readDebugReg(_atUsdReg);
     final fapLow = usd & _usdFap != 0;
@@ -309,7 +326,6 @@ const _crStrt = 1 << 6;
 const _crLock = 1 << 7;
 const _crOptwre = 1 << 9;
 
-const _srBsy = 1 << 0;
 const _srPgerr = 1 << 2;
 const _srWrprterr = 1 << 4;
 const _srEop = 1 << 5;
@@ -318,21 +334,11 @@ const _obrOptReadout = 1 << 1;
 const _obRdp = 0x1ffff800;
 const _rdpUnprotect = 0xa5;
 
-class Stm32f1Flash implements FlashDriver {
-  Stm32f1Flash(this._probe, this._core, this._pageSize, int sramBytes,
+class Stm32f1Flash extends _FpecFlash {
+  Stm32f1Flash(super.probe, super.core, super.pageSize, super.sramBytes,
       {int rdpDisable = _rdpUnprotect, bool word = false})
       : _rdpDisable = rdpDisable,
-        _word = word,
-        _bufferSize = (() {
-          final s = ((sramBytes - 0x400) >> 2) << 2;
-          return s < 0x2000 ? s : 0x2000;
-        })() {
-    if (_bufferSize < 0x400) throw SwdException('target SRAM too small for flash loader');
-  }
-
-  final DebugProbe _probe;
-  final CortexM _core;
-  final int _pageSize;
+        _word = word;
 
   /// Value written to the RDP option byte to remove read protection
   /// (0xA5 on STM32F1, 0xAA on STM32F0/F3).
@@ -341,22 +347,9 @@ class Stm32f1Flash implements FlashDriver {
   /// True for FMCs that program in 32-bit words instead of 16-bit halfwords
   /// (GigaDevice GD32E103 — same FPEC registers, word-width data).
   final bool _word;
-  final int _bufferSize;
-  final int _loaderAddr = 0x20000000;
-  final int _bufferAddr = 0x20000100;
 
   @override
   int get programAlign => _word ? 4 : 2;
-
-  Future<int> _waitBusy(int timeoutMs) async {
-    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
-    for (;;) {
-      final sr = await _probe.readDebugReg(_f1Sr);
-      if ((sr & _srBsy) == 0) return sr;
-      if (DateTime.now().isAfter(deadline)) throw SwdException('STM32F1 flash busy after $timeoutMs ms');
-      await sleep(2);
-    }
-  }
 
   void _checkErr(int sr, String what) {
     if (sr & _srWrprterr != 0) throw SwdException('$what: write-protection error (WRPRTERR)');
@@ -445,10 +438,6 @@ class Stm32f1Flash implements FlashDriver {
       progress?.call(done, total);
     }
   }
-
-  @override
-  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
-      _verifyCommon(_probe, address, data, progress);
 
   @override
   Future<ProtectionState> readProtection() async {
