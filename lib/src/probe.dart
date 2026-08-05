@@ -194,7 +194,9 @@ class Probe {
   FlashDriver _makeDriver() {
     final t = _target!;
     if (t.family == 'AT32') return At32Flash(_stlink!, _core!, t.pageSize, t.sramBytes);
-    if (t.family == 'STM32F1') return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes);
+    if (t.family == 'STM32') {
+      return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes, rdpDisable: t.rdpDisableValue);
+    }
     throw SwdException('no flash driver for target family "${t.family}"');
   }
 

@@ -1,0 +1,134 @@
+import 'dart:typed_data';
+
+import 'package:swdart/swdart.dart';
+import 'package:swdart/src/loader.dart';
+import 'package:swdart/src/util.dart';
+import 'package:test/test.dart';
+
+void main() {
+  group('util', () {
+    test('hex formats 32-bit values', () {
+      expect(hex(0x08000000), '0x08000000');
+      expect(hex(0xdeadbeef), '0xDEADBEEF');
+      expect(hex(0x1f, 4), '0x001F');
+    });
+    test('u32le / little-endian byte lists', () {
+      expect(u32le(Uint8List.fromList([0x78, 0x56, 0x34, 0x12]), 0), 0x12345678);
+      expect(u32(0x12345678), [0x78, 0x56, 0x34, 0x12]);
+      expect(u16(0xbeef), [0xef, 0xbe]);
+    });
+  });
+
+  group('Thumb flash loaders', () {
+    test('are 17 halfwords each', () {
+      expect(halfwordLoader.length, 17);
+      expect(wordLoader.length, 17);
+    });
+    test('differ only in load/store width and pointer stride', () {
+      // Same control flow; only indices 2,3 (ldrh/strh vs ldr/str) and 11,12
+      // (adds #2 vs #4) may differ.
+      const mayDiffer = {2, 3, 11, 12};
+      for (var i = 0; i < 17; i++) {
+        if (mayDiffer.contains(i)) continue;
+        expect(wordLoader[i], halfwordLoader[i], reason: 'index $i must match');
+      }
+      expect(halfwordLoader[2], 0x8804); // ldrh r4,[r0]
+      expect(wordLoader[2], 0x6804); //     ldr  r4,[r0]
+      expect(halfwordLoader[11], 0x3002); // adds r0,#2
+      expect(wordLoader[11], 0x3004); //     adds r0,#4
+      expect(halfwordLoader.last, 0xbe01); // bkpt #1 (error)
+    });
+  });
+
+  group('Intel HEX', () {
+    test('parses a simple record set', () {
+      // 8 bytes at offset 0, then EOF.
+      const hexText = ':080000000102030405060708D4\n'
+          ':00000001FF\n';
+      final img = parseIntelHex(hexText);
+      expect(img.base, 0);
+      expect(img.data, [1, 2, 3, 4, 5, 6, 7, 8]);
+    });
+    test('honours extended linear addresses', () {
+      const hexText = ':020000040800F2\n' // upper = 0x0800_0000
+          ':04000000AABBCCDDEE\n'
+          ':00000001FF\n';
+      final img = parseIntelHex(hexText);
+      expect(img.base, 0x08000000);
+      expect(img.data, [0xAA, 0xBB, 0xCC, 0xDD]);
+    });
+    test('rejects a bad checksum', () {
+      expect(() => parseIntelHex(':0800000001020304050607080B\n'), throwsA(isA<SwdException>()));
+    });
+  });
+
+  group('target detection', () {
+    test('STM32F1 medium-density at 0xE0042000', () async {
+      final probe = Stlink(_FakeTransport({
+        0xe0042000: 0x20036410, // rev|dev 0x410
+        0x1ffff7e0: 64, // 64 KB
+        0xe000ef34: 0, // no FPU
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'STM32');
+      expect(t.pageSize, 1024);
+      expect(t.rdpDisableValue, 0xa5);
+      expect(t.flashKB, 64);
+      expect(t.programAlign, 2);
+    });
+
+    test('STM32F03x via the F0/F3 IDCODE at 0x40015800 (RDP 0xAA)', () async {
+      final probe = Stlink(_FakeTransport({
+        0xe0042000: 0, // not an F1 / AT32
+        0x40015800: 0x10006444, // dev 0x444
+        0x1ffff7cc: 32,
+        0xe000ef34: 0,
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'STM32');
+      expect(t.name, contains('F03'));
+      expect(t.rdpDisableValue, 0xaa);
+    });
+
+    test('AT32F415CBT7 (no FPU disambiguates the shared PID)', () async {
+      final probe = Stlink(_FakeTransport({
+        0xe0042000: 0x700301c5,
+        0xe000ef34: 0, // no FPU => F415, not F413
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'AT32');
+      expect(t.pageSize, 1024);
+      expect(t.flashKB, 128);
+      expect(t.programAlign, 4);
+    });
+  });
+}
+
+/// A fake ST-Link USB transport that answers only READDEBUGREG with a mapped
+/// value — enough to exercise target detection without hardware.
+class _FakeTransport implements UsbTransport {
+  _FakeTransport(this.regs);
+  final Map<int, int> regs;
+
+  @override
+  int get productId => 0x3748;
+  @override
+  String get productName => 'fake';
+  @override
+  bool get isV3 => false;
+
+  @override
+  Future<Uint8List> xfer(List<int> command, {int rxLen = 0, Uint8List? data}) async {
+    // READDEBUGREG = [0xF2, 0x36, addr32le] -> [status, _, _, _, value32le]
+    if (command.length >= 6 && command[0] == 0xf2 && command[1] == 0x36) {
+      final addr = command[2] | command[3] << 8 | command[4] << 16 | command[5] << 24;
+      final v = regs[addr] ?? 0;
+      return Uint8List.fromList(
+          [0x80, 0, 0, 0, v & 0xff, v >> 8 & 0xff, v >> 16 & 0xff, v >> 24 & 0xff]);
+    }
+    return Uint8List(rxLen);
+  }
+
+  @override
+  Future<void> close() async {}
+}

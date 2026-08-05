@@ -32,8 +32,12 @@ await probe.disconnect();
 | | |
 |---|---|
 | Probes | ST-Link/V2, V2-1, V3 (and V2 clones) |
-| Targets | STM32F103 (FPEC), Artery **AT32F415** (FMC) — flash + RDP/FAP |
+| Targets | **STM32F0 / F1 / F3** (FPEC) and Artery **AT32F415** (FMC) — flash + RDP/FAP |
+| Files | raw `.bin` and Intel **HEX** (`parseIntelHex`) |
 | Platforms | Web (Chrome/Edge, WebUSB), Windows, macOS, Linux (libusb) |
+
+There's a full **cross-platform demo app** (connect / flash / dump / protection /
+debug) under [`demo/`](demo/) — `cd demo && flutter run -d chrome`.
 
 The transport, target-detection and flash-driver layers are abstractions
 (`UsbTransport`, `detectTarget`, `FlashDriver`), so more probes/chips can be

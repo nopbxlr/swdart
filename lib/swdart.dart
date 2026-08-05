@@ -24,6 +24,7 @@ export 'src/probe.dart' show Probe, ConnectMode, CoreRegister;
 export 'src/targets.dart' show TargetInfo, detectTarget;
 export 'src/flash.dart'
     show FlashDriver, ProgressFn, ProtectionState, ProtectionResult, At32Flash, Stm32f1Flash;
+export 'src/intel_hex.dart' show FlashImage, parseIntelHex;
 export 'src/util.dart' show SwdException, hex;
 
 // ── lower-level building blocks (custom flows / new drivers / new probes) ──

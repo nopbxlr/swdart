@@ -319,8 +319,10 @@ const _obRdp = 0x1ffff800;
 const _rdpUnprotect = 0xa5;
 
 class Stm32f1Flash implements FlashDriver {
-  Stm32f1Flash(this._probe, this._core, this._pageSize, int sramBytes)
-      : _bufferSize = (() {
+  Stm32f1Flash(this._probe, this._core, this._pageSize, int sramBytes,
+      {int rdpDisable = _rdpUnprotect})
+      : _rdpDisable = rdpDisable,
+        _bufferSize = (() {
           final s = ((sramBytes - 0x400) >> 2) << 2;
           return s < 0x2000 ? s : 0x2000;
         })() {
@@ -330,6 +332,10 @@ class Stm32f1Flash implements FlashDriver {
   final Stlink _probe;
   final CortexM _core;
   final int _pageSize;
+
+  /// Value written to the RDP option byte to remove read protection
+  /// (0xA5 on STM32F1, 0xAA on STM32F0/F3).
+  final int _rdpDisable;
   final int _bufferSize;
   final int _loaderAddr = 0x20000000;
   final int _bufferAddr = 0x20000100;
@@ -442,7 +448,7 @@ class Stm32f1Flash implements FlashDriver {
 
   @override
   Future<ProtectionResult> setProtection(bool enable) async {
-    final rdp = enable ? 0x00 : _rdpUnprotect;
+    final rdp = enable ? 0x00 : _rdpDisable;
     await _eraseOptions();
     await _writeOptions(rdp);
     return enable
