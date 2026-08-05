@@ -1,10 +1,18 @@
 name: swdart
 description: >-
   Program and debug ARM Cortex-M microcontrollers over ST-Link in pure Dart —
-  WebUSB in the browser, libusb on desktop. STM32F103 and Artery AT32F415 today,
-  with abstractions for adding more probes, targets and flash drivers.
+  WebUSB in the browser, libusb on desktop. STM32F0/F1/F3, Artery AT32F415 and
+  Nordic nRF51/nRF52 (flash + read-protection, incl. locked-nRF recovery), with
+  abstractions for adding more probes, targets and flash drivers.
 version: 0.1.0
-# repository: https://github.com/<you>/swdart
+repository: https://github.com/nopbxlr/swdart
+issue_tracker: https://github.com/nopbxlr/swdart/issues
+topics:
+  - arm
+  - cortex-m
+  - stlink
+  - swd
+  - embedded
 
 environment:
   sdk: ^3.5.0
