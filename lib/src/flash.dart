@@ -234,7 +234,7 @@ class At32Flash implements FlashDriver {
   @override
   Future<ProtectionResult> setProtection(bool enable) => enable ? _enableFap() : _disableFap();
 
-  /// Disable FAP — the unbrick path. Erases USD, writes FAP=0xA5 (0x5AA5) as a
+  /// Disable FAP. Erases USD, writes FAP=0xA5 (0x5AA5) as a
   /// single 16-bit access to 0x1FFFF800; the device mass-erases and resets.
   Future<ProtectionResult> _disableFap() async {
     await _initFlash();

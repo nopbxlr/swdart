@@ -55,7 +55,7 @@ class TargetInfo {
   /// Value that disables read protection (STM32: 0xA5 on F1, 0xAA on F0/F3).
   final int rdpDisableValue;
 
-  /// True if this exact device has been exercised on hardware by this project.
+  /// True if this exact device has been verified on real hardware.
   final bool tested;
 }
 

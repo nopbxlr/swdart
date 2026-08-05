@@ -41,7 +41,7 @@ class CoreRegister {
 }
 
 const _flashBase = 0x08000000;
-const _fullLen = 0x20000; // default programmable window (128 KB)
+const _fallbackLen = 0x20000; // fallback when the chip's flash size can't be read
 const _dbgmcuCr = 0xe0042004;
 
 /// A debug/programming session with one target over one ST-Link probe.
@@ -274,11 +274,16 @@ class Probe {
   }
 
   // ── flash programming ─────────────────────────────────────────────────
-  /// Read [length] bytes of flash (default the whole 128 KB window).
-  Future<Uint8List> readFlash({int address = _flashBase, int length = _fullLen}) async {
+  /// Read flash. [address] defaults to the target's flash base and [length] to
+  /// the detected flash size (falling back to 128 KB only if the size is
+  /// unreadable).
+  Future<Uint8List> readFlash({int? address, int? length}) async {
     await halt();
-    _emit('[flash] reading $length bytes from ${hex(address)}');
-    return readMemory(address, length);
+    final base = address ?? _target?.flashBase ?? _flashBase;
+    final kb = _target?.flashKB ?? 0;
+    final len = length ?? (kb > 0 ? kb * 1024 : _fallbackLen);
+    _emit('[flash] reading $len bytes from ${hex(base)}');
+    return readMemory(base, len);
   }
 
   /// Mass-erase the whole flash.

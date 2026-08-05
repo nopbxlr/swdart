@@ -21,8 +21,8 @@ await probe.disconnect();
 - **Debugging** — halt / resume / single-step, read & write core registers,
   read & write arbitrary memory, reset-halt / reset-run.
 - **Programming** — read (dump), erase, write, verify flash; a one-call
-  high-level `program()`; read-protection get/set including the mass-erase
-  *unbrick* path.
+  high-level `program()`; read-protection get/set, including the mass-erase
+  recovery path that clears protection on a device its own firmware locked.
 - **One codebase, two transports** — the USB layer is chosen by conditional
   import: WebUSB (`dart:js_interop`) on web, libusb-1.0 (`dart:ffi`) on desktop.
   Runs in Flutter (web + desktop) and in plain Dart CLIs.
@@ -101,7 +101,7 @@ await probe.resume();
 ### Programming
 
 ```dart
-final image = await probe.readFlash();              // dump (default 128 KB)
+final image = await probe.readFlash();              // dump (defaults to whole detected flash)
 await probe.program(0x08000000, bytes);             // erase + write + verify
 await probe.erase(0x08000000, bytes.length);        // just erase
 await probe.writeFlash(0x08000000, bytes);          // write, no erase

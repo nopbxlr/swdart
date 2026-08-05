@@ -183,7 +183,7 @@ class _HomeState extends State<_Home> {
 
   Future<void> _setProtection(bool enable) => _run(enable ? 'Locking' : 'Unlocking', () async {
         if (!enable) {
-          final ok = await _confirm('Unlock / rescue?',
+          final ok = await _confirm('Unlock (mass-erases chip)?',
               'This clears read protection and MASS-ERASES the whole chip.');
           if (!ok) return;
         }
