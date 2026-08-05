@@ -9,6 +9,8 @@ Internal cleanup; one small breaking API change.
 - `TargetInfo` gains an explicit `word` flag (true for GD32E103's 32-bit-word
   FPEC), replacing the previous overloading of `programAlign == 4` as the driver
   selector; `_makeDriver` now switches on the family enum.
+- Refactor: shared FPEC plumbing (work-buffer sizing, BSY wait, read-back
+  verify) factored out of the AT32/STM32 drivers into a common base.
 - No behaviour change; renamed the internal probe field for accuracy.
 
 ## 0.1.1
