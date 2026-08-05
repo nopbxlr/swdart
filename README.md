@@ -33,7 +33,7 @@ await probe.disconnect();
 | | |
 |---|---|
 | Probes | ST-Link/V2, V2-1, V3 (and V2 clones) |
-| Targets | **STM32F0 / F1 / F3** (FPEC), Artery **AT32F415** (FMC), Nordic **nRF51 / nRF52** (NVMC) — flash + protection |
+| Targets | **STM32F0/F1/F3** & GigaDevice **GD32F103 / GD32E103** (FPEC), Artery **AT32F415** (FMC), Nordic **nRF51/nRF52** (NVMC) — flash + protection |
 | Files | raw `.bin` and Intel **HEX** (`parseIntelHex`) |
 | Platforms | Web (Chrome/Edge, WebUSB), Windows, macOS, Linux (libusb) |
 
@@ -134,6 +134,11 @@ await Probe().recoverNordic();   // CTRL-AP ERASEALL — wipes + unlocks the nRF
   AT32 FMC in 32-bit words, so tiny hand-verified Thumb routines run from target
   SRAM to hit the required width; register sequences follow OpenOCD's own
   drivers.
+- **GigaDevice GD32** — GD32F103 is an STM32F103 FPEC clone and flashes on the
+  STM32F1 path (device id 0x410/0x414, RDP 0xA5). GD32E103 (Cortex-M4) uses the
+  *same* FPEC registers but programs in **32-bit words**, so it's detected by its
+  GigaDevice **FMC_PID** signature (`0x40022100 == 0x48424333`) and routed to the
+  word loader — its device id alone is ambiguous. RDP is the usual 0xA5.
 - **Nordic NVMC** — nRF51/nRF52 program 32-bit words straight through the debug
   AP (no SRAM loader); erased (`0xFFFFFFFF`) words are skipped. The chip reports
   its own page size and flash size from FICR.

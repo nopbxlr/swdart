@@ -3,9 +3,9 @@
 ///
 /// The USB transport is chosen automatically per platform: **WebUSB** in the
 /// browser and **libusb** on desktop. Supported targets today: STM32F0/F1/F3,
-/// Artery AT32F415, and Nordic nRF51/nRF52 (flash + read-protection, including
-/// CTRL-AP recovery of a locked nRF); the probe, target-detection and
-/// flash-driver layers are abstracted so more can be added.
+/// GigaDevice GD32F103/GD32E103, Artery AT32F415, and Nordic nRF51/nRF52 (flash
+/// + read-protection, including CTRL-AP recovery of a locked nRF); the probe,
+/// target-detection and flash-driver layers are abstracted so more can be added.
 ///
 /// Start with [Probe]:
 /// ```dart

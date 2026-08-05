@@ -1,5 +1,17 @@
 # Changelog
 
+## 0.1.1
+
+- GigaDevice **GD32F103** and **GD32E103** support. GD32F103 is an STM32F103
+  FPEC clone and flashes on the existing STM32F1 path (device id 0x410/0x414,
+  RDP 0xA5), now labelled as such.
+- **GD32E103** (Cortex-M4) is detected by its GigaDevice **FMC_PID** signature
+  (`0x40022100 == 0x48424333`) and programmed in **32-bit words** via the shared
+  FPEC driver (`Stm32f1Flash(word: true)`) — its device id is ambiguous and it
+  needs word-width flash unlike the halfword STM32F1/GD32F103. RDP is the usual
+  0xA5. (Detection/values reverse-engineered from a GD flasher firmware; the
+  GD32E103 flash path is a faithful port, not yet bench-verified.)
+
 ## 0.1.0
 
 Initial release.

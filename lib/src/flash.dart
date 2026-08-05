@@ -320,8 +320,9 @@ const _rdpUnprotect = 0xa5;
 
 class Stm32f1Flash implements FlashDriver {
   Stm32f1Flash(this._probe, this._core, this._pageSize, int sramBytes,
-      {int rdpDisable = _rdpUnprotect})
+      {int rdpDisable = _rdpUnprotect, bool word = false})
       : _rdpDisable = rdpDisable,
+        _word = word,
         _bufferSize = (() {
           final s = ((sramBytes - 0x400) >> 2) << 2;
           return s < 0x2000 ? s : 0x2000;
@@ -336,12 +337,16 @@ class Stm32f1Flash implements FlashDriver {
   /// Value written to the RDP option byte to remove read protection
   /// (0xA5 on STM32F1, 0xAA on STM32F0/F3).
   final int _rdpDisable;
+
+  /// True for FMCs that program in 32-bit words instead of 16-bit halfwords
+  /// (GigaDevice GD32E103 — same FPEC registers, word-width data).
+  final bool _word;
   final int _bufferSize;
   final int _loaderAddr = 0x20000000;
   final int _bufferAddr = 0x20000100;
 
   @override
-  int get programAlign => 2;
+  int get programAlign => _word ? 4 : 2;
 
   Future<int> _waitBusy(int timeoutMs) async {
     final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
@@ -407,10 +412,13 @@ class Stm32f1Flash implements FlashDriver {
 
   @override
   Future<void> program(int address, Uint8List data, [ProgressFn? progress]) async {
-    if (address % 2 != 0) throw SwdException('program address must be halfword-aligned');
+    final align = _word ? 4 : 2;
+    if (address % align != 0) {
+      throw SwdException('program address must be ${_word ? 'word' : 'halfword'}-aligned');
+    }
     if (!await _core.isHalted()) throw SwdException('core must be halted to program flash');
 
-    final padLen = ((data.length + 1) >> 1) << 1;
+    final padLen = ((data.length + align - 1) ~/ align) * align;
     final padded = Uint8List(padLen)..fillRange(0, padLen, 0xff);
     padded.setRange(0, data.length, data);
 
@@ -426,8 +434,10 @@ class Stm32f1Flash implements FlashDriver {
       await _probe.writeMem32(_bufferAddr, chunk);
 
       await _probe.writeDebugReg(_f1Cr, _crPg);
-      await runLoader(_probe, _core, halfwordLoader,
-          loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: address + done, count: chunkLen >> 1);
+      // Same FPEC PG sequence; GD32E103 copies 32-bit words, STM32 16-bit halfwords.
+      await runLoader(_probe, _core, _word ? wordLoader : halfwordLoader,
+          loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: address + done,
+          count: chunkLen >> (_word ? 2 : 1));
       final sr = await _probe.readDebugReg(_f1Sr);
       await _probe.writeDebugReg(_f1Cr, 0);
       _checkErr(sr, 'program at ${hex(address + done)}');
@@ -480,8 +490,10 @@ class Stm32f1Flash implements FlashDriver {
     options[1] = 0x00;
     await _probe.writeMem32(_bufferAddr, options);
     await _probe.writeDebugReg(_f1Cr, _crOptpg | _crOptwre);
-    await runLoader(_probe, _core, halfwordLoader,
-        loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: _obRdp, count: 8);
+    // Word mode writes the same 16-byte image as 4 words — word 0 is 0xFFFF00A5
+    // for RDP-disable, matching the GD32E103 flasher firmware.
+    await runLoader(_probe, _core, _word ? wordLoader : halfwordLoader,
+        loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: _obRdp, count: _word ? 4 : 8);
     final sr = await _probe.readDebugReg(_f1Sr);
     await _probe.writeDebugReg(_f1Cr, _crLock);
     _checkErr(sr, 'program option bytes');

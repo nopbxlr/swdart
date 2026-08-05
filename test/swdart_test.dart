@@ -102,6 +102,20 @@ void main() {
       expect(t.programAlign, 4);
     });
 
+    test('GD32E103 via FMC_PID 0x40022100 (word-programmed FPEC)', () async {
+      final probe = Stlink(_FakeTransport({
+        0x40022100: 0x48424333, // GigaDevice FMC_PID for GD32E103
+        0x1ffff7e0: 128, // 128 KB flash-size register
+      }));
+      final t = await detectTarget(probe, CortexM(probe));
+      expect(t.family, 'STM32');
+      expect(t.name, contains('GD32E103'));
+      expect(t.pageSize, 1024);
+      expect(t.programAlign, 4); // 32-bit word programming
+      expect(t.flashKB, 128);
+      expect(t.rdpDisableValue, 0xa5);
+    });
+
     test('Nordic nRF52832 via FICR (4 KB pages, APPROTECT)', () async {
       final probe = Stlink(_FakeTransport({
         0x10000010: 4096, // FICR.CODEPAGESIZE

@@ -162,11 +162,39 @@ Future<TargetInfo?> _detectNordic(DebugProbe probe) async {
   );
 }
 
+// GigaDevice FMC product-ID register (0x40022000 + 0x100). GD32 parts return a
+// signature here that STM32 (no such register), AT32 and Nordic do not.
+// Reverse-engineered from a GD flasher firmware that supports all three chips.
+const _gd32FmcPid = 0x40022100;
+const _gd32e103Pid = 0x48424333; // GD32E103 — Cortex-M4, 32-bit WORD flash
+// (GD32F103's FMC_PID is 0x41424333, but it's 16-bit like STM32 and already
+// matches device id 0x410/0x414, so it needs no special-case here.)
+
 Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
   // Nordic first — its FICR signature is unambiguous and avoids an nRF whose
   // 0xE0042000 read happens to look AT32-like.
   final nrf = await _detectNordic(probe);
   if (nrf != null) return nrf;
+
+  // GD32E103 must be caught by its FMC_PID before the STM32F1 device-id table:
+  // it may share device id 0x410 with medium-density parts, yet it programs in
+  // 32-bit words (programAlign 4 selects the word loader), not halfwords.
+  if (await _readReg(probe, _gd32FmcPid) == _gd32e103Pid) {
+    final kb = (await _readFlashKB(probe, _flashSizeF1)).clamp(0, 4096);
+    return TargetInfo(
+      name: 'GD32E103 (Cortex-M4${kb > 0 ? ', $kb KB' : ''}, word-programmed FPEC)',
+      family: 'STM32',
+      idcode: _gd32e103Pid,
+      flashKB: kb == 0 ? 128 : kb,
+      pageSize: 1024,
+      sramBytes: 32 * 1024,
+      flashBase: 0x08000000,
+      programAlign: 4,
+      protection: 'RDP',
+      rdpDisableValue: 0xa5,
+      tested: false,
+    );
+  }
 
   final idcode1 = await _readReg(probe, _dbgmcuF1);
 

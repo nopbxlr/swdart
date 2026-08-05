@@ -220,7 +220,10 @@ class Probe {
     final t = _target!;
     if (t.family == 'AT32') return At32Flash(_stlink!, _core!, t.pageSize, t.sramBytes);
     if (t.family == 'STM32') {
-      return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes, rdpDisable: t.rdpDisableValue);
+      // programAlign 4 marks a word-programmed FPEC (GD32E103); 2 is the usual
+      // STM32/GD32F103 halfword.
+      return Stm32f1Flash(_stlink!, _core!, t.pageSize, t.sramBytes,
+          rdpDisable: t.rdpDisableValue, word: t.programAlign == 4);
     }
     if (t.family == 'NRF') {
       return NrfFlash(_stlink!, _core!, t.pageSize, isNrf52: t.protection == 'APPROTECT');
