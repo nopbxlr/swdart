@@ -1,0 +1,503 @@
+// Flash drivers ported from openocd-ts (src/flash/{driver,at32,stm32f1}.ts).
+// Register sequences follow OpenOCD's own drivers (artery.c / stm32f1x.c) —
+// behavior only, no code copied.
+import 'dart:typed_data';
+
+import 'cortexm.dart';
+import 'loader.dart';
+import 'stlink.dart';
+import 'util.dart';
+
+typedef ProgressFn = void Function(int done, int total);
+
+class ProtectionState {
+  ProtectionState(this.enabled, this.level);
+  final bool enabled;
+  final String level;
+}
+
+class ProtectionResult {
+  ProtectionResult({
+    required this.massErased,
+    required this.resetRequired,
+    required this.autoReset,
+    required this.message,
+  });
+  final bool massErased;
+  final bool resetRequired;
+  final bool autoReset;
+  final String message;
+}
+
+abstract class FlashDriver {
+  int get programAlign;
+  Future<void> massErase();
+  Future<void> erase(int address, int length, [ProgressFn? progress]);
+  Future<void> program(int address, Uint8List data, [ProgressFn? progress]);
+  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]);
+  Future<ProtectionState> readProtection();
+  Future<ProtectionResult> setProtection(bool enable);
+}
+
+// ─────────────────────────── AT32F415 (Artery FMC) ───────────────────────────
+const _atBase = 0x40022000;
+const _atUnlock = _atBase + 0x04;
+const _atUsdUnlock = _atBase + 0x08;
+const _atSts = _atBase + 0x0c;
+const _atCtrl = _atBase + 0x10;
+const _atAddr = _atBase + 0x14;
+const _atUsdReg = _atBase + 0x1c;
+
+const _key1 = 0x45670123;
+const _key2 = 0xcdef89ab;
+
+const _ctrlFprgm = 1 << 0;
+const _ctrlSecers = 1 << 1;
+const _ctrlBankers = 1 << 2;
+const _ctrlUsdprgm = 1 << 4;
+const _ctrlUsders = 1 << 5;
+const _ctrlErstr = 1 << 6;
+const _ctrlOplk = 1 << 7;
+const _ctrlUsdulks = 1 << 9;
+
+const _stsObf = 1 << 0;
+const _stsPrgmerr = 1 << 2;
+const _stsEpperr = 1 << 4;
+
+const _usdFap = 1 << 1;
+const _usdFapHl = 1 << 26;
+
+const _fapDisabled = 0xa5;
+const _fapLow = 0xff;
+
+const _crmCtrl = 0x40021000;
+const _crmHicken = 1 << 1;
+const _crmHickstbl = 1 << 0;
+
+const _usdBase = 0x1ffff800;
+
+class At32Flash implements FlashDriver {
+  At32Flash(this._probe, this._core, this._pageSize, int sramBytes, {this.hasFapHighLevel = true})
+      : _bufferSize = (() {
+          final s = ((sramBytes - 0x400) >> 2) << 2;
+          return s < 0x2000 ? s : 0x2000;
+        })();
+
+  final Stlink _probe;
+  final CortexM _core;
+  final int _pageSize;
+  final bool hasFapHighLevel;
+  final int _bufferSize;
+  final int _loaderAddr = 0x20000000;
+  final int _bufferAddr = 0x20000100;
+
+  @override
+  int get programAlign => 4;
+
+  Future<int> _waitBusy(int timeoutMs) async {
+    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+    for (;;) {
+      final sts = await _probe.readDebugReg(_atSts);
+      if ((sts & _stsObf) == 0) return sts;
+      if (DateTime.now().isAfter(deadline)) throw SwdException('AT32 flash busy after $timeoutMs ms');
+      await sleep(2);
+    }
+  }
+
+  Future<void> _enableHick() async {
+    var ctrl = await _probe.readDebugReg(_crmCtrl);
+    if (ctrl & _crmHickstbl != 0) return;
+    await _probe.writeDebugReg(_crmCtrl, ctrl | _crmHicken);
+    final deadline = DateTime.now().add(const Duration(seconds: 1));
+    do {
+      ctrl = await _probe.readDebugReg(_crmCtrl);
+      if (ctrl & _crmHickstbl != 0) return;
+      await sleep(2);
+    } while (DateTime.now().isBefore(deadline));
+    throw SwdException('AT32 HICK clock did not stabilize');
+  }
+
+  Future<void> _unlockFlash() async {
+    if ((await _probe.readDebugReg(_atCtrl) & _ctrlOplk) == 0) return;
+    await _probe.writeDebugReg(_atUnlock, _key1);
+    await _probe.writeDebugReg(_atUnlock, _key2);
+    if (await _probe.readDebugReg(_atCtrl) & _ctrlOplk != 0) {
+      throw SwdException('AT32 flash unlock failed (OPLK still set)');
+    }
+  }
+
+  Future<void> _unlockUsd() async {
+    if (await _probe.readDebugReg(_atCtrl) & _ctrlUsdulks != 0) return;
+    await _probe.writeDebugReg(_atUsdUnlock, _key1);
+    await _probe.writeDebugReg(_atUsdUnlock, _key2);
+    if (await _probe.readDebugReg(_atCtrl) & _ctrlUsdulks == 0) {
+      throw SwdException('AT32 user-system-data unlock failed');
+    }
+  }
+
+  Future<void> _initFlash() async {
+    await _enableHick();
+    await _unlockFlash();
+    await _unlockUsd();
+  }
+
+  Future<void> _deinitFlash() async {
+    var ctrl = await _probe.readDebugReg(_atCtrl);
+    if (ctrl & _ctrlUsdulks != 0) await _probe.writeDebugReg(_atCtrl, ctrl & ~_ctrlUsdulks);
+    ctrl = await _probe.readDebugReg(_atCtrl);
+    if (ctrl & _ctrlOplk == 0) await _probe.writeDebugReg(_atCtrl, ctrl | _ctrlOplk);
+  }
+
+  void _checkErr(int sts, String what) {
+    if (sts & _stsEpperr != 0) throw SwdException('$what: erase/program protection error (EPPERR)');
+    if (sts & _stsPrgmerr != 0) throw SwdException('$what: programming error (PRGMERR)');
+  }
+
+  @override
+  Future<void> massErase() async {
+    await _initFlash();
+    try {
+      await _waitBusy(50);
+      await _probe.writeDebugReg(_atSts, _stsEpperr);
+      await _probe.writeDebugReg(_atCtrl, _ctrlBankers | _ctrlErstr);
+      _checkErr(await _waitBusy(2400), 'mass erase');
+    } finally {
+      await _deinitFlash();
+    }
+  }
+
+  @override
+  Future<void> erase(int address, int length, [ProgressFn? progress]) async {
+    final first = ((address - 0x08000000) / _pageSize).floor();
+    final last = (((address + length - 0x08000000) / _pageSize).ceil()) - 1;
+    final total = last - first + 1;
+    await _initFlash();
+    try {
+      await _probe.writeDebugReg(_atSts, _stsEpperr);
+      await _waitBusy(50);
+      var done = 0;
+      for (var page = first; page <= last; page++) {
+        final pageAddr = 0x08000000 + page * _pageSize;
+        await _probe.writeDebugReg(_atAddr, pageAddr);
+        await _probe.writeDebugReg(_atCtrl, _ctrlSecers | _ctrlErstr);
+        _checkErr(await _waitBusy(500), 'erase page ${hex(pageAddr)}');
+        progress?.call(++done, total);
+      }
+    } finally {
+      await _deinitFlash();
+    }
+  }
+
+  @override
+  Future<void> program(int address, Uint8List data, [ProgressFn? progress]) async {
+    if (address % 4 != 0) throw SwdException('AT32 program address must be word-aligned');
+    if (!await _core.isHalted()) throw SwdException('core must be halted to program flash');
+
+    final padded = Uint8List(((data.length + 3) >> 2) << 2)..fillRange(0, ((data.length + 3) >> 2) << 2, 0xff);
+    padded.setRange(0, data.length, data);
+
+    await _initFlash();
+    try {
+      await _probe.writeDebugReg(_atSts, _stsPrgmerr);
+      await _probe.writeDebugReg(_atCtrl, _ctrlFprgm);
+      final total = padded.length;
+      var done = 0;
+      while (done < total) {
+        final chunkLen = (total - done) < _bufferSize ? (total - done) : _bufferSize;
+        await _probe.writeMem32(_bufferAddr, Uint8List.sublistView(padded, done, done + chunkLen));
+        await runLoader(_probe, _core, wordLoader,
+            loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: address + done, count: chunkLen >> 2);
+        _checkErr(await _probe.readDebugReg(_atSts), 'program at ${hex(address + done)}');
+        done += chunkLen;
+        progress?.call(done, total);
+      }
+      await _probe.writeDebugReg(_atCtrl, 0);
+    } finally {
+      await _deinitFlash();
+    }
+  }
+
+  @override
+  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
+      _verifyCommon(_probe, address, data, progress);
+
+  @override
+  Future<ProtectionState> readProtection() async {
+    final usd = await _probe.readDebugReg(_atUsdReg);
+    final fapLow = usd & _usdFap != 0;
+    final fapHigh = hasFapHighLevel && (usd & _usdFapHl != 0);
+    if (fapHigh && fapLow) return ProtectionState(true, 'high (FAP)');
+    if (fapLow) return ProtectionState(true, 'low (FAP)');
+    return ProtectionState(false, 'disabled');
+  }
+
+  @override
+  Future<ProtectionResult> setProtection(bool enable) => enable ? _enableFap() : _disableFap();
+
+  /// Disable FAP — the unbrick path. Erases USD, writes FAP=0xA5 (0x5AA5) as a
+  /// single 16-bit access to 0x1FFFF800; the device mass-erases and resets.
+  Future<ProtectionResult> _disableFap() async {
+    await _initFlash();
+    await _waitBusy(50);
+    await _probe.writeDebugReg(_atCtrl, _ctrlUsdulks | _ctrlUsders | _ctrlErstr);
+    await _waitBusy(50);
+    await _probe.writeDebugReg(_atSts, _stsPrgmerr);
+    await _probe.writeDebugReg(_atCtrl, _ctrlUsdulks | _ctrlUsdprgm);
+    await _waitBusy(50);
+    final fapHalfword = _fapDisabled | ((~_fapDisabled & 0xff) << 8); // 0x5AA5
+    try {
+      await _probe.writeU16(_usdBase, fapHalfword);
+    } catch (_) {
+      // device reset during/after the write — expected
+    }
+    return ProtectionResult(
+      massErased: true,
+      resetRequired: false,
+      autoReset: true,
+      message: 'FAP disabled: the chip erased its flash and reset. Power-cycle the board, then reconnect.',
+    );
+  }
+
+  Future<ProtectionResult> _enableFap() async {
+    final usdImage = await _probe.readMem32(_usdBase, 16);
+    await _initFlash();
+    try {
+      await _waitBusy(50);
+      await _probe.writeDebugReg(_atCtrl, _ctrlUsdulks | _ctrlUsders | _ctrlErstr);
+      await _waitBusy(50);
+      await _probe.writeDebugReg(_atSts, _stsPrgmerr);
+      await _probe.writeDebugReg(_atCtrl, _ctrlUsdulks | _ctrlUsdprgm);
+      await _waitBusy(50);
+      await _probe.writeU16(_usdBase, _fapLow | ((~_fapLow & 0xff) << 8));
+      await _waitBusy(50);
+      for (var off = 2; off < 16; off += 2) {
+        final word = u32le(usdImage, off & ~3);
+        final halfword = (off & 2) == 0 ? word & 0xffff : (word >> 16) & 0xffff;
+        if (halfword != 0xffff) {
+          await _probe.writeU16(_usdBase + off, halfword);
+          await _waitBusy(50);
+        }
+      }
+      _checkErr(await _probe.readDebugReg(_atSts), 'enable FAP');
+    } finally {
+      await _deinitFlash();
+    }
+    return ProtectionResult(
+      massErased: false,
+      resetRequired: true,
+      autoReset: false,
+      message: 'FAP enabled. Power-cycle the board for read protection to take effect.',
+    );
+  }
+}
+
+// ─────────────────────────── STM32F1 (FPEC) ───────────────────────────
+const _f1Base = 0x40022000;
+const _f1Keyr = _f1Base + 0x04;
+const _f1Optkeyr = _f1Base + 0x08;
+const _f1Sr = _f1Base + 0x0c;
+const _f1Cr = _f1Base + 0x10;
+const _f1Ar = _f1Base + 0x14;
+const _f1Obr = _f1Base + 0x1c;
+
+const _crPg = 1 << 0;
+const _crPer = 1 << 1;
+const _crMer = 1 << 2;
+const _crOptpg = 1 << 4;
+const _crOpter = 1 << 5;
+const _crStrt = 1 << 6;
+const _crLock = 1 << 7;
+const _crOptwre = 1 << 9;
+
+const _srBsy = 1 << 0;
+const _srPgerr = 1 << 2;
+const _srWrprterr = 1 << 4;
+const _srEop = 1 << 5;
+
+const _obrOptReadout = 1 << 1;
+const _obRdp = 0x1ffff800;
+const _rdpUnprotect = 0xa5;
+
+class Stm32f1Flash implements FlashDriver {
+  Stm32f1Flash(this._probe, this._core, this._pageSize, int sramBytes)
+      : _bufferSize = (() {
+          final s = ((sramBytes - 0x400) >> 2) << 2;
+          return s < 0x2000 ? s : 0x2000;
+        })() {
+    if (_bufferSize < 0x400) throw SwdException('target SRAM too small for flash loader');
+  }
+
+  final Stlink _probe;
+  final CortexM _core;
+  final int _pageSize;
+  final int _bufferSize;
+  final int _loaderAddr = 0x20000000;
+  final int _bufferAddr = 0x20000100;
+
+  @override
+  int get programAlign => 2;
+
+  Future<int> _waitBusy(int timeoutMs) async {
+    final deadline = DateTime.now().add(Duration(milliseconds: timeoutMs));
+    for (;;) {
+      final sr = await _probe.readDebugReg(_f1Sr);
+      if ((sr & _srBsy) == 0) return sr;
+      if (DateTime.now().isAfter(deadline)) throw SwdException('STM32F1 flash busy after $timeoutMs ms');
+      await sleep(2);
+    }
+  }
+
+  void _checkErr(int sr, String what) {
+    if (sr & _srWrprterr != 0) throw SwdException('$what: write-protection error (WRPRTERR)');
+    if (sr & _srPgerr != 0) throw SwdException('$what: programming error (PGERR)');
+  }
+
+  Future<void> _unlock() async {
+    if (await _probe.readDebugReg(_f1Cr) & _crLock != 0) {
+      await _probe.writeDebugReg(_f1Keyr, _key1);
+      await _probe.writeDebugReg(_f1Keyr, _key2);
+      if (await _probe.readDebugReg(_f1Cr) & _crLock != 0) {
+        throw SwdException('STM32F1 flash unlock failed (CR.LOCK still set)');
+      }
+    }
+  }
+
+  Future<void> _unlockOptions() async {
+    if (await _probe.readDebugReg(_f1Cr) & _crOptwre != 0) return;
+    await _probe.writeDebugReg(_f1Optkeyr, _key1);
+    await _probe.writeDebugReg(_f1Optkeyr, _key2);
+  }
+
+  Future<void> _clearStatus() => _probe.writeDebugReg(_f1Sr, _srEop | _srPgerr | _srWrprterr);
+
+  @override
+  Future<void> massErase() async {
+    await _unlock();
+    await _clearStatus();
+    await _probe.writeDebugReg(_f1Cr, _crMer);
+    await _probe.writeDebugReg(_f1Cr, _crMer | _crStrt);
+    final sr = await _waitBusy(30000);
+    await _probe.writeDebugReg(_f1Cr, 0);
+    _checkErr(sr, 'mass erase');
+  }
+
+  @override
+  Future<void> erase(int address, int length, [ProgressFn? progress]) async {
+    final first = (address ~/ _pageSize) * _pageSize;
+    final last = ((address + length + _pageSize - 1) ~/ _pageSize) * _pageSize;
+    final total = (last - first) ~/ _pageSize;
+    await _unlock();
+    await _clearStatus();
+    var done = 0;
+    for (var page = first; page < last; page += _pageSize) {
+      await _probe.writeDebugReg(_f1Cr, _crPer);
+      await _probe.writeDebugReg(_f1Ar, page);
+      await _probe.writeDebugReg(_f1Cr, _crPer | _crStrt);
+      _checkErr(await _waitBusy(3000), 'erase page ${hex(page)}');
+      progress?.call(++done, total);
+    }
+    await _probe.writeDebugReg(_f1Cr, 0);
+  }
+
+  @override
+  Future<void> program(int address, Uint8List data, [ProgressFn? progress]) async {
+    if (address % 2 != 0) throw SwdException('program address must be halfword-aligned');
+    if (!await _core.isHalted()) throw SwdException('core must be halted to program flash');
+
+    final padLen = ((data.length + 1) >> 1) << 1;
+    final padded = Uint8List(padLen)..fillRange(0, padLen, 0xff);
+    padded.setRange(0, data.length, data);
+
+    await _unlock();
+    await _clearStatus();
+    final total = padded.length;
+    var done = 0;
+    while (done < total) {
+      final chunkLen = (total - done) < _bufferSize ? (total - done) : _bufferSize;
+      final wordLen = ((chunkLen + 3) >> 2) << 2;
+      final chunk = Uint8List(wordLen)..fillRange(0, wordLen, 0xff);
+      chunk.setRange(0, chunkLen, Uint8List.sublistView(padded, done, done + chunkLen));
+      await _probe.writeMem32(_bufferAddr, chunk);
+
+      await _probe.writeDebugReg(_f1Cr, _crPg);
+      await runLoader(_probe, _core, halfwordLoader,
+          loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: address + done, count: chunkLen >> 1);
+      final sr = await _probe.readDebugReg(_f1Sr);
+      await _probe.writeDebugReg(_f1Cr, 0);
+      _checkErr(sr, 'program at ${hex(address + done)}');
+      done += chunkLen;
+      progress?.call(done, total);
+    }
+  }
+
+  @override
+  Future<void> verify(int address, Uint8List data, [ProgressFn? progress]) =>
+      _verifyCommon(_probe, address, data, progress);
+
+  @override
+  Future<ProtectionState> readProtection() async {
+    final active = await _probe.readDebugReg(_f1Obr) & _obrOptReadout != 0;
+    return ProtectionState(active, active ? 'level 1 (RDP)' : 'disabled');
+  }
+
+  @override
+  Future<ProtectionResult> setProtection(bool enable) async {
+    final rdp = enable ? 0x00 : _rdpUnprotect;
+    await _eraseOptions();
+    await _writeOptions(rdp);
+    return enable
+        ? ProtectionResult(
+            massErased: false,
+            resetRequired: true,
+            autoReset: false,
+            message: 'Read protection (RDP) enabled. Power-cycle for it to take effect.')
+        : ProtectionResult(
+            massErased: true,
+            resetRequired: true,
+            autoReset: false,
+            message: 'RDP cleared: the chip will mass-erase on the next reset. Power-cycle, then reconnect.');
+  }
+
+  Future<void> _eraseOptions() async {
+    await _unlock();
+    await _unlockOptions();
+    await _probe.writeDebugReg(_f1Cr, _crOpter | _crOptwre);
+    await _probe.writeDebugReg(_f1Cr, _crOpter | _crStrt | _crOptwre);
+    _checkErr(await _waitBusy(3000), 'erase option bytes');
+  }
+
+  Future<void> _writeOptions(int rdp) async {
+    await _unlock();
+    await _unlockOptions();
+    final options = Uint8List(16)..fillRange(0, 16, 0xff);
+    options[0] = rdp;
+    options[1] = 0x00;
+    await _probe.writeMem32(_bufferAddr, options);
+    await _probe.writeDebugReg(_f1Cr, _crOptpg | _crOptwre);
+    await runLoader(_probe, _core, halfwordLoader,
+        loaderAddr: _loaderAddr, srcAddr: _bufferAddr, dstAddr: _obRdp, count: 8);
+    final sr = await _probe.readDebugReg(_f1Sr);
+    await _probe.writeDebugReg(_f1Cr, _crLock);
+    _checkErr(sr, 'program option bytes');
+  }
+}
+
+// Shared read-back verify.
+Future<void> _verifyCommon(Stlink probe, int address, Uint8List data, ProgressFn? progress) async {
+  final total = data.length;
+  var done = 0;
+  while (done < total) {
+    final chunkLen = (total - done) < 1024 ? (total - done) : 1024;
+    final readLen = ((chunkLen + 3) >> 2) << 2;
+    final read = await probe.readMem32(address + done, readLen);
+    for (var i = 0; i < chunkLen; i++) {
+      if (read[i] != data[done + i]) {
+        throw SwdException(
+          'verify FAILED at ${hex(address + done + i)}: wrote 0x${data[done + i].toRadixString(16).padLeft(2, '0')}, read 0x${read[i].toRadixString(16).padLeft(2, '0')}',
+        );
+      }
+    }
+    done += chunkLen;
+    progress?.call(done, total);
+  }
+}
