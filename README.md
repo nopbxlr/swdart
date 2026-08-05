@@ -151,9 +151,17 @@ await Probe().recoverNordic();   // CTRL-AP ERASEALL — wipes + unlocks the nRF
 
 ## Extending
 
-- **New flash driver** — implement `FlashDriver` and select it in a target map
-  (see `detectTarget` + `Probe`).
-- **New probe** — implement `UsbTransport` and provide open/reacquire.
+Everything above the wire — Cortex-M debug, target detection, the flash drivers
+and CTRL-AP recovery — is written against the `DebugProbe` interface, not any one
+probe's protocol, so there are three independent extension points:
+
+- **New flash driver** (another chip family) — implement `FlashDriver` and select
+  it in a target map (see `detectTarget` + `Probe`).
+- **New probe type** (CMSIS-DAP, J-Link) — implement `DebugProbe`. `Stlink` is the
+  reference implementation; the bulk of a DAP-based backend is a host-side ADIv5
+  MEM-AP layer that turns `readDebugReg`/`readMem*`/`readDapReg` into AP transfers.
+- **New USB backend for the same probe** — implement `UsbTransport` and provide
+  open/reacquire (this is how WebUSB vs. libusb are swapped for ST-Link).
 
 ## Credits
 

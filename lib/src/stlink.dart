@@ -3,6 +3,7 @@
 // protocol; this is a faithful Dart port.
 import 'dart:typed_data';
 
+import 'debug_probe.dart';
 import 'transport.dart';
 import 'util.dart';
 
@@ -71,32 +72,30 @@ const _modeDfu = 0x00;
 const _maxRw32 = 1024;
 const _maxRw8 = 64;
 
-class ProbeVersion {
-  ProbeVersion(this.stlink, this.jtag, this.swim, this.text);
-  final int stlink;
-  final int jtag;
-  final int swim;
-  final String text;
-}
-
-class Stlink {
+class Stlink implements DebugProbe {
   Stlink(this._usb);
   final UsbTransport _usb;
 
+  @override
   ProbeVersion version = ProbeVersion(0, 0, 0, '?');
 
+  @override
   String get probeName => _usb.productName;
 
   /// Native 16-bit memory access: all V3, or V2 firmware >= J26.
+  @override
   bool get hasMem16 => _usb.isV3 || version.jtag >= 26;
 
   /// Raw DAP register access (READ/WRITE_DAP_REG): all V3, or V2 firmware >= J24.
+  @override
   bool get hasDapReg => _usb.isV3 || version.jtag >= 24;
 
   /// Multi-AP open/close (INIT_AP): all V3, or V2 firmware >= J28. Required to
   /// reach any AP other than the AHB-AP — e.g. Nordic's CTRL-AP.
+  @override
   bool get hasApInit => _usb.isV3 || version.jtag >= 28;
 
+  @override
   Future<void> init() async {
     await _readVersion();
     if (!_usb.isV3 && version.jtag < 15) {
@@ -127,6 +126,7 @@ class Stlink {
     return rx[0];
   }
 
+  @override
   Future<double?> getTargetVoltage() async {
     final rx = await _usb.xfer([_cmdGetTargetVoltage], rxLen: 8);
     final adcRef = u32le(rx, 0);
@@ -143,6 +143,7 @@ class Stlink {
     }
   }
 
+  @override
   Future<void> enterSwd() async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2Enter, _debugEnterSwd], rxLen: 2);
     _checkStatus(rx, 'enter SWD');
@@ -152,40 +153,47 @@ class Stlink {
     await _usb.xfer([_cmdDebug, _debugExit]);
   }
 
+  @override
   Future<int> readIdcode() async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2ReadIdcodes], rxLen: 12);
     _checkStatus(rx, 'read IDCODE');
     return u32le(rx, 4);
   }
 
+  @override
   Future<void> resetSys() async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2Resetsys], rxLen: 2);
     _checkStatus(rx, 'reset');
   }
 
   /// Drive NRST: 0 = low (reset), 1 = high, 2 = pulse.
+  @override
   Future<void> driveNrst(int state) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2DriveNrst, state], rxLen: 2);
     _checkStatus(rx, 'drive NRST');
   }
 
+  @override
   Future<int> readReg(int index) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2Readreg, index], rxLen: 8);
     _checkStatus(rx, 'read core reg $index');
     return u32le(rx, 4);
   }
 
+  @override
   Future<void> writeReg(int index, int value) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2Writereg, index, ...u32(value)], rxLen: 2);
     _checkStatus(rx, 'write core reg $index');
   }
 
+  @override
   Future<int> readDebugReg(int address) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2Readdebugreg, ...u32(address)], rxLen: 8);
     _checkStatus(rx, 'read ${hex(address)}');
     return u32le(rx, 4);
   }
 
+  @override
   Future<void> writeDebugReg(int address, int value) async {
     final rx =
         await _usb.xfer([_cmdDebug, _apiv2Writedebugreg, ...u32(address), ...u32(value)], rxLen: 2);
@@ -194,12 +202,14 @@ class Stlink {
 
   /// Open (initialize) access port [apSel] so its registers can be reached with
   /// [readDapReg]/[writeDapReg]. Needs [hasApInit].
+  @override
   Future<void> initAp(int apSel) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2InitAp, apSel], rxLen: 2);
     _checkStatus(rx, 'init AP $apSel');
   }
 
   /// Close access port [apSel].
+  @override
   Future<void> closeAp(int apSel) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2CloseAp, apSel], rxLen: 2);
     _checkStatus(rx, 'close AP $apSel');
@@ -207,6 +217,7 @@ class Stlink {
 
   /// Read raw DAP register [addr] from access port [apSel]
   /// ([dapPortDebug] addresses the debug port itself). Needs [hasDapReg].
+  @override
   Future<int> readDapReg(int apSel, int addr) async {
     final rx = await _usb.xfer([_cmdDebug, _apiv2ReadDapReg, ...u16(apSel), ...u16(addr)], rxLen: 8);
     _checkStatus(rx, 'read DAP AP$apSel reg ${hex(addr, 4)}');
@@ -214,6 +225,7 @@ class Stlink {
   }
 
   /// Write [value] to raw DAP register [addr] on access port [apSel].
+  @override
   Future<void> writeDapReg(int apSel, int addr, int value) async {
     final rx = await _usb
         .xfer([_cmdDebug, _apiv2WriteDapReg, ...u16(apSel), ...u16(addr), ...u32(value)], rxLen: 2);
@@ -230,6 +242,7 @@ class Stlink {
     }
   }
 
+  @override
   Future<Uint8List> readMem32(int address, int length) async {
     if (address % 4 != 0 || length % 4 != 0) {
       throw SwdException('readMem32 requires 4-byte alignment');
@@ -248,6 +261,7 @@ class Stlink {
     return result;
   }
 
+  @override
   Future<void> writeMem32(int address, Uint8List dataBuf) async {
     if (address % 4 != 0 || dataBuf.length % 4 != 0) {
       throw SwdException('writeMem32 requires 4-byte alignment');
@@ -264,6 +278,7 @@ class Stlink {
     }
   }
 
+  @override
   Future<Uint8List> readMem8(int address, int length) async {
     final result = Uint8List(length);
     var done = 0;
@@ -279,6 +294,7 @@ class Stlink {
   }
 
   /// Byte-wise memory write for unaligned accesses (small transfers).
+  @override
   Future<void> writeMem8(int address, Uint8List dataBuf) async {
     var done = 0;
     while (done < dataBuf.length) {
@@ -292,6 +308,7 @@ class Stlink {
     }
   }
 
+  @override
   Future<void> writeU16(int address, int value) async {
     if (!hasMem16) {
       throw SwdException(
@@ -306,6 +323,7 @@ class Stlink {
     await _checkLastRwStatus('write16 ${hex(address)}');
   }
 
+  @override
   Future<int> readU16(int address) async {
     if (!hasMem16) throw SwdException('this ST-Link firmware lacks 16-bit memory access');
     final rx = await _usb.xfer([_cmdDebug, _apiv2Readmem16, ...u32(address), ...u16(2)], rxLen: 2);
@@ -313,6 +331,7 @@ class Stlink {
     return rx[0] | (rx[1] << 8);
   }
 
+  @override
   Future<void> close() async {
     try {
       await exitDebug();

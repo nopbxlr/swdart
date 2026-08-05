@@ -30,8 +30,9 @@ export 'src/nrf_recover.dart' show nrfCtrlApEraseAll, NrfRecoverResult;
 export 'src/util.dart' show SwdException, hex;
 
 // ── lower-level building blocks (custom flows / new drivers / new probes) ──
+export 'src/debug_probe.dart' show DebugProbe, ProbeVersion;
 export 'src/stlink.dart'
-    show Stlink, ProbeVersion, regR0, regR1, regR2, regR3, regSp, regLr, regPc, regXpsr;
+    show Stlink, regR0, regR1, regR2, regR3, regSp, regLr, regPc, regXpsr;
 export 'src/cortexm.dart' show CortexM;
 export 'src/transport.dart' show UsbTransport;
 export 'src/transport_open.dart' show requestStlink, reacquireStlink;

@@ -1,5 +1,6 @@
 // Cortex-M debug control on top of an ST-Link probe (ported from openocd-ts
 // src/core/cortexm.ts). Standard ARMv7-M debug registers.
+import 'debug_probe.dart';
 import 'stlink.dart';
 import 'util.dart';
 
@@ -18,7 +19,7 @@ const _aircrSysresetreq = 0x05fa0004;
 
 class CortexM {
   CortexM(this._probe);
-  final Stlink _probe;
+  final DebugProbe _probe;
 
   Future<bool> isHalted() async => (await _probe.readDebugReg(dhcsr) & _sHalt) != 0;
 

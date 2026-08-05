@@ -12,6 +12,7 @@
 import 'dart:typed_data';
 
 import 'cortexm.dart';
+import 'debug_probe.dart';
 import 'stlink.dart';
 import 'util.dart';
 
@@ -41,7 +42,7 @@ Uint8List _loaderToBytes(List<int> code) {
 /// caller sets the flash controller into program mode before calling and reads
 /// the status register afterwards.
 Future<void> runLoader(
-  Stlink probe,
+  DebugProbe probe,
   CortexM core,
   List<int> code, {
   required int loaderAddr,

@@ -1,7 +1,7 @@
 // Target identification: STM32F0/F1/F3 (and GD32 clones) via the shared FPEC,
 // Artery AT32 via its DBGMCU "project ID", and Nordic nRF51/nRF52 via FICR.
 import 'cortexm.dart';
-import 'stlink.dart';
+import 'debug_probe.dart';
 
 // STM32F1 (Cortex-M3) exposes DBGMCU_IDCODE here; the flash-size word lives at
 // 0x1FFFF7E0. STM32F0/F3 (Cortex-M0/M4) use 0x40015800 / 0x1FFFF7CC instead.
@@ -115,7 +115,7 @@ const _at32f415 = <_ArteryPart>[
 // PIDs shared between AT32F413 (has FPU) and AT32F415 (no FPU).
 const _collidingPids = <int>{0x700301c5, 0x70030240, 0x70030242};
 
-Future<int> _readReg(Stlink probe, int address) async {
+Future<int> _readReg(DebugProbe probe, int address) async {
   try {
     return await probe.readDebugReg(address);
   } catch (_) {
@@ -123,7 +123,7 @@ Future<int> _readReg(Stlink probe, int address) async {
   }
 }
 
-Future<int> _readFlashKB(Stlink probe, int reg) async {
+Future<int> _readFlashKB(DebugProbe probe, int reg) async {
   final kb = await _readReg(probe, reg) & 0xffff;
   return kb == 0xffff ? 0 : kb;
 }
@@ -135,7 +135,7 @@ const _ficrInfoPart = 0x10000100; //     part number (nRF52+; 0xFFFFFFFF on nRF5
 
 /// Positive Nordic signature: a sane FICR page size + page count. STM32/AT32
 /// read 0 (reserved region) here, so this can run first without false matches.
-Future<TargetInfo?> _detectNordic(Stlink probe) async {
+Future<TargetInfo?> _detectNordic(DebugProbe probe) async {
   final pageSize = await _readReg(probe, _ficrCodePageSize);
   final codePages = await _readReg(probe, _ficrCodeSize);
   final pageOk = pageSize == 1024 || pageSize == 2048 || pageSize == 4096;
@@ -162,7 +162,7 @@ Future<TargetInfo?> _detectNordic(Stlink probe) async {
   );
 }
 
-Future<TargetInfo> detectTarget(Stlink probe, CortexM core) async {
+Future<TargetInfo> detectTarget(DebugProbe probe, CortexM core) async {
   // Nordic first — its FICR signature is unambiguous and avoids an nRF whose
   // 0xE0042000 read happens to look AT32-like.
   final nrf = await _detectNordic(probe);
@@ -240,7 +240,7 @@ Future<TargetInfo> detectTarget(Stlink probe, CortexM core) async {
   );
 }
 
-Future<TargetInfo> _stm32(Stlink probe, int idcode, _Stm dev, int flashSizeReg) async {
+Future<TargetInfo> _stm32(DebugProbe probe, int idcode, _Stm dev, int flashSizeReg) async {
   final flashKB = await _readFlashKB(probe, flashSizeReg);
   return TargetInfo(
     name: '${dev.name}${flashKB > 0 ? ', $flashKB KB flash' : ''}',

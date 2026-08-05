@@ -6,7 +6,7 @@
 // custom CTRL-AP (access port #1) that survives protection and can trigger a
 // whole-chip ERASEALL, which clears the protection. This is the SWD equivalent
 // of the Artery FAP-disable rescue.
-import 'stlink.dart';
+import 'debug_probe.dart';
 import 'util.dart';
 
 // CTRL-AP is access port #1 on both nRF51 and nRF52.
@@ -43,7 +43,7 @@ class NrfRecoverResult {
 /// Requires ST-Link V2 firmware **J28+** or any **V3** (multi-AP support).
 /// Throws [SwdException] if the CTRL-AP isn't a Nordic one, so it's safe to call
 /// against an unknown target: a non-Nordic AP is rejected before any erase.
-Future<NrfRecoverResult> nrfCtrlApEraseAll(Stlink probe, {void Function(String line)? log}) async {
+Future<NrfRecoverResult> nrfCtrlApEraseAll(DebugProbe probe, {void Function(String line)? log}) async {
   void emit(String s) => log?.call(s);
 
   if (!probe.hasApInit) {

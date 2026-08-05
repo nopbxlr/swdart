@@ -4,6 +4,7 @@ import 'dart:async';
 import 'dart:typed_data';
 
 import 'cortexm.dart';
+import 'debug_probe.dart';
 import 'flash.dart';
 import 'nrf_recover.dart';
 import 'stlink.dart';
@@ -58,7 +59,7 @@ class Probe {
   Probe();
 
   UsbTransport? _usb;
-  Stlink? _stlink;
+  DebugProbe? _stlink;
   CortexM? _core;
   TargetInfo? _target;
   FlashDriver? _driver;
@@ -205,7 +206,7 @@ class Probe {
   /// (DBG_WWDG_STOP | DBG_IWDG_STOP | DBG_STANDBY | DBG_STOP | DBG_SLEEP). The
   /// DBGMCU/DEBUG control register is not reset by system reset, so once is
   /// enough. Layout shared by STM32F1 and AT32.
-  Future<void> _freezeWatchdogs(Stlink p) async {
+  Future<void> _freezeWatchdogs(DebugProbe p) async {
     try {
       final cur = await p.readDebugReg(_dbgmcuCr);
       await p.writeDebugReg(_dbgmcuCr, cur | 0x307);
@@ -233,7 +234,7 @@ class Probe {
     return c;
   }
 
-  Stlink get _p {
+  DebugProbe get _p {
     final p = _stlink;
     if (p == null) throw SwdException('not connected');
     return p;

@@ -4,8 +4,8 @@
 import 'dart:typed_data';
 
 import 'cortexm.dart';
+import 'debug_probe.dart';
 import 'loader.dart';
-import 'stlink.dart';
 import 'util.dart';
 
 typedef ProgressFn = void Function(int done, int total);
@@ -83,7 +83,7 @@ class At32Flash implements FlashDriver {
           return s < 0x2000 ? s : 0x2000;
         })();
 
-  final Stlink _probe;
+  final DebugProbe _probe;
   final CortexM _core;
   final int _pageSize;
   final bool hasFapHighLevel;
@@ -329,7 +329,7 @@ class Stm32f1Flash implements FlashDriver {
     if (_bufferSize < 0x400) throw SwdException('target SRAM too small for flash loader');
   }
 
-  final Stlink _probe;
+  final DebugProbe _probe;
   final CortexM _core;
   final int _pageSize;
 
@@ -510,7 +510,7 @@ const _uicrRbpconf51 = 0x10001004; //   nRF51 RBPCONF (PALL in bits[7:0])
 class NrfFlash implements FlashDriver {
   NrfFlash(this._probe, this._core, this._pageSize, {required this.isNrf52});
 
-  final Stlink _probe;
+  final DebugProbe _probe;
   final CortexM _core;
   final int _pageSize;
   final bool isNrf52;
@@ -635,7 +635,7 @@ class NrfFlash implements FlashDriver {
 }
 
 // Shared read-back verify.
-Future<void> _verifyCommon(Stlink probe, int address, Uint8List data, ProgressFn? progress) async {
+Future<void> _verifyCommon(DebugProbe probe, int address, Uint8List data, ProgressFn? progress) async {
   final total = data.length;
   var done = 0;
   while (done < total) {
